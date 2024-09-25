@@ -43,8 +43,6 @@
 
 > # Some Useful Utilities
 > ```c++
-> #include "include/EasyFCGI.hpp"
-> 
 > auto RequestMethod = Request.Method;
 > auto ContentType   = Request.ContentType;
 > 
