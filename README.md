@@ -47,6 +47,7 @@
 > auto ContentType   = Request.ContentType;
 > 
 > auto YourFormField       = Request.Query["YourFieldName"];
+> auto RepeatedFormField_N = Request.Query.CountRepeated("RepeatedFieldName");
 > auto RepeatedFormField_0 = Request.Query["RepeatedFieldName",0];
 > auto RepeatedFormField_1 = Request.Query["RepeatedFieldName",1];
 > 
