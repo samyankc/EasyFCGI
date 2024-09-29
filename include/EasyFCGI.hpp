@@ -214,10 +214,21 @@ namespace ParseUtil
                 Result.reserve( Count( Pattern ).In( Input ) + 1 );
 
                 auto EndsWithPattern = Input.ends_with( Pattern );
-                do {
-                    // auto Pivot = Input | Search( Pattern );
-                    std::forward_as_tuple( std::back_inserter( Result ), Input ) = Input | SplitOnceBy( Pattern );
-                } while( ! Input.empty() );
+                if consteval
+                {
+                    do std::forward_as_tuple( std::back_inserter( Result ), Input ) = Input | SplitOnceBy( Pattern );
+                    while( ! Input.empty() );
+                }
+                else
+                {
+                    auto BMH = std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() );
+                    do {
+                        auto [MatchBegin, MatchEnd] = BMH( Input.begin(), Input.end() );
+                        Result.emplace_back( Input.begin(), MatchBegin );
+                        Input = { MatchEnd, Input.end() };
+                    } while( ! Input.empty() );
+                }
+
                 if( EndsWithPattern ) Result.push_back( Input );
 
                 return Result;
@@ -793,15 +804,11 @@ namespace EasyFCGI
                 {
                     auto ResultPath = Path;
                     auto FileExtension = Path.extension().string();
-                    auto OriginalStem = Path.stem();
+                    auto OriginalStem = Path.stem().string();
                     do {
-                        auto Now = std::chrono::system_clock::now();
-                        auto TimeStampSuffix = ".{:%Y.%m.%d.%H.%M.%S}"_FMT( Now );
-                        auto NewFileName = OriginalStem;
-                        NewFileName += StrView{ TimeStampSuffix }.substr( 0, 24 );
-                        ResultPath
-                            .replace_filename( NewFileName )  //
-                            .replace_extension( FileExtension );
+                        auto TimeStampSuffix = ".{:%Y.%m.%d.%H.%M.%S}"_FMT( std::chrono::file_clock::now() );
+                        auto NewFileName = "{}{}{}"_FMT( OriginalStem, StrView{ TimeStampSuffix }.substr( 0, 24 ), FileExtension );
+                        ResultPath.replace_filename( NewFileName );
                     } while( FS::exists( ResultPath ) );
                     return ResultPath;
                 }
@@ -877,7 +884,7 @@ namespace EasyFCGI
 
             Header.EnvPtr = FCGX_Request_Ptr->envp;
             Cookie.EnvPtr = FCGX_Request_Ptr->envp;
-            
+
             Method = GetParam( "REQUEST_METHOD" );
             ContentType = GetParam( "CONTENT_TYPE" );
 
