@@ -34,7 +34,7 @@ namespace ParseUtil
     {
         char Data[N];
         constexpr FixedString( const char ( &Src )[N] ) noexcept { std::copy_n( Src, N, Data ); }
-        constexpr operator StrView() const noexcept { return { Data, N }; }
+        constexpr operator StrView() const noexcept { return { Data, N - 1 }; }
     };
 
     template<FixedString FSTR> constexpr auto operator""_FMT() noexcept
@@ -59,37 +59,32 @@ namespace ParseUtil
 
     inline namespace RangeAdaptor
     {
-        struct CollapseToEndRA : RNG::range_adaptor_closure<CollapseToEndRA>
+        constexpr struct CollapseToEndRA : RNG::range_adaptor_closure<CollapseToEndRA>
         {
             constexpr auto static operator()( StrView Input ) { return StrView{ Input.end(), Input.end() }; }
-        };
-        constexpr auto CollapseToEnd = CollapseToEndRA{};
+        } CollapseToEnd;
 
-        struct FrontRA : RNG::range_adaptor_closure<FrontRA>
+        constexpr struct FrontRA : RNG::range_adaptor_closure<FrontRA>
         {
             constexpr auto static operator()( auto&& Range ) { return *std::begin( Range ); }
-        };
-        constexpr auto Front = FrontRA{};
+        } Front;
 
-        struct BeginRA : RNG::range_adaptor_closure<BeginRA>
+        constexpr struct BeginRA : RNG::range_adaptor_closure<BeginRA>
         {
             constexpr auto static operator()( auto&& Range ) { return RNG::begin( Range ); }
-        };
-        constexpr auto Begin = BeginRA{};
+        } Begin;
 
-        struct EndRA : RNG::range_adaptor_closure<EndRA>
+        constexpr struct EndRA : RNG::range_adaptor_closure<EndRA>
         {
             constexpr auto static operator()( auto&& Range ) { return RNG::end( Range ); }
-        };
-        constexpr auto End = EndRA{};
+        } End;
 
-        struct BoundaryRA : RNG::range_adaptor_closure<BoundaryRA>
+        constexpr struct BoundaryRA : RNG::range_adaptor_closure<BoundaryRA>
         {
             constexpr auto static operator()( auto&& Range ) { return std::array{ RNG::begin( Range ), RNG::end( Range ) }; }
-        };
-        constexpr auto Boundary = BoundaryRA{};
+        } Boundary;
 
-        struct TrimSpaceRA : RNG::range_adaptor_closure<TrimSpaceRA>
+        constexpr struct TrimSpaceRA : RNG::range_adaptor_closure<TrimSpaceRA>
         {
             constexpr static StrView operator()( StrView Input )
             {
@@ -99,8 +94,27 @@ namespace ParseUtil
                 return { &*RNG::begin( SpaceRemoved ),                               //
                          &*RNG::rbegin( SpaceRemoved ) + 1 };
             }
+        } TrimSpace;
+
+        struct TrimLeading : StrViewPattern, RNG::range_adaptor_closure<TrimLeading>
+        {
+            using StrViewPattern::StrViewPattern;
+            constexpr StrView operator()( StrView Input ) const
+            {
+                if( Input.starts_with( Pattern ) ) Input.remove_prefix( Pattern.length() );
+                return Input;
+            }
         };
-        constexpr auto TrimSpace = TrimSpaceRA{};
+
+        struct TrimTrailing : StrViewPattern, RNG::range_adaptor_closure<TrimTrailing>
+        {
+            using StrViewPattern::StrViewPattern;
+            constexpr StrView operator()( StrView Input ) const
+            {
+                if( Input.ends_with( Pattern ) ) Input.remove_suffix( Pattern.length() );
+                return Input;
+            }
+        };
 
         struct Trim : StrViewPattern, RNG::range_adaptor_closure<Trim>
         {
@@ -121,9 +135,11 @@ namespace ParseUtil
                 if consteval { return StrView{ RNG::search( Input, Pattern ) }; }
                 else
                 {
-                    auto Match = std::search( Input.begin(), Input.end(),  //
-                                              std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() ) );
-                    return { Match, Match == Input.end() ? Match : std::next( Match, Pattern.length() ) };
+                    // auto Match = std::search( Input.begin(), Input.end(),  //
+                    //                           std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() ) );
+                    // return { Match, Match == Input.end() ? Match : std::next( Match, Pattern.length() ) };
+                    auto [MatchBegin, MatchEnd] = std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() )( Input.begin(), Input.end() );
+                    return { MatchBegin, MatchEnd };
                 }
             }
             constexpr StrView In( StrView Input ) const { return operator()( Input ); }
@@ -248,7 +264,7 @@ namespace ParseUtil
             }
         };
 
-        struct RestoreSpaceCharRA : RNG::range_adaptor_closure<RestoreSpaceCharRA>
+        constexpr struct RestoreSpaceCharRA : RNG::range_adaptor_closure<RestoreSpaceCharRA>
         {
             constexpr static auto operator()( const auto& Input )
             {
@@ -258,8 +274,7 @@ namespace ParseUtil
                 } );
                 return Result;
             };
-        };
-        constexpr auto RestoreSpaceChar = RestoreSpaceCharRA{};
+        } RestoreSpaceChar;
 
         struct SliceAt : RNG::range_adaptor_closure<SliceAt>
         {
@@ -542,7 +557,7 @@ namespace EasyFCGI
                                                    .replace_extension( Config::SocketExtensionSuffix );
 
         inline static auto OptionSocketPath = [] -> std::optional<FS::path> {
-            for( auto&& [Option, OptionArg] : CommandLine | VIEW::adjacent<2> )
+            for( auto&& [Option, OptionArg] : CommandLine | VIEW::pairwise )
                 if( Option == StrView{ "-s" } )  //
                     return OptionArg;
             return {};
@@ -619,38 +634,74 @@ namespace EasyFCGI
 
     struct Response
     {
+        struct Header
+        {
+            std::map<std::string, std::string> Cookies;
+            std::map<std::string, std::string> Entries;
+            [[maybe_unused]] decltype( auto ) clear()
+            {
+                Cookies.clear();
+                Entries.clear();
+                return *this;
+            }
+            [[maybe_unused]] decltype( auto ) Reset() { return clear(); }
+        };
+
+        struct Body : std::string
+        {
+            using std::string::string;
+            using std::string::operator=;
+            using std::string::operator+=;
+        };
+
         HTTP::StatusCode StatusCode{ HTTP::StatusCode::OK };
         HTTP::ContentType ContentType{ HTTP::ContentType::Text::Plain };
-        std::vector<std::string> Body;
+        struct Header Header;
+        struct Body Body;
 
         [[maybe_unused]] decltype( auto ) Set( HTTP::StatusCode NewValue ) { return StatusCode = NewValue, *this; }
         [[maybe_unused]] decltype( auto ) Set( HTTP::ContentType NewValue ) { return ContentType = NewValue, *this; }
-
+        [[maybe_unused]] decltype( auto ) SetHeader( const std::string& Key, auto&& Value )
+        {
+            Header.Entries[Key] = std::forward<decltype( Value )>( Value );
+            return *this;
+        }
+        [[maybe_unused]] decltype( auto ) SetCookie( const std::string& Key, auto&& Value )
+        {
+            Header.Cookies[Key] = std::forward<decltype( Value )>( Value );
+            return *this;
+        }
         [[maybe_unused]] decltype( auto ) Reset()
         {
             Set( HTTP::StatusCode::OK );
             Set( HTTP::ContentType::Text::Plain );
+            Header.clear();
             Body.clear();
             return *this;
         }
 
-        template<typename T> [[maybe_unused]] decltype( auto ) Append( T&& NewContent ) noexcept
+        template<typename T>  //requires( ! std::same_as<std::remove_cvref_t<T>, Response> )
+        [[maybe_unused]] decltype( auto ) operator=( T&& NewContent )
         {
-            if constexpr( DumpingString<T> ) { Body.push_back( NewContent.dump() ); }
-            else { Body.push_back( static_cast<std::string>( std::forward<T>( NewContent ) ) ); }
+            if constexpr( DumpingString<T> ) { Body = std::forward<T>( NewContent ).dump(); }
+            else { Body = std::forward<T>( NewContent ); }
             return *this;
         }
 
-        template<typename T> [[maybe_unused]] decltype( auto ) operator+=( T&& NewContent ) noexcept { return Append( std::forward<T>( NewContent ) ); }
-
-        template<typename T> requires( ! std::same_as<std::remove_cvref_t<T>, Response> )
-        [[maybe_unused]] decltype( auto ) operator=( T&& NewContent ) noexcept
+        template<typename T>  //
+        [[maybe_unused]] decltype( auto ) Append( T&& NewContent )
         {
-            Body.clear();
+            if( Body.empty() ) return operator=( std::forward<T>( NewContent ) );
+            if constexpr( DumpingString<T> ) { Body.append( NewContent.dump() ); }
+            else { Body.append( std::forward<T>( NewContent ) ); }
+            return *this;
+        }
+
+        template<typename T>                                            //
+        [[maybe_unused]] decltype( auto ) operator+=( T&& NewContent )  //
+        {
             return Append( std::forward<T>( NewContent ) );
         }
-
-        // template<std::default_initializable T> operator T() const { return {}; }
     };
 
     struct Request
@@ -671,11 +722,15 @@ namespace EasyFCGI
             }
         };
 
-        template<typename StorageEngine>  //
-        struct QueryExecutor
+        struct Query
         {
-            StorageEngine Json;
+            EasyFCGI::Json Json;
             auto contains( StrView Key ) const { return Json.contains( Key ); }
+            auto CountRepeated( StrView Key ) const -> decltype( Json.size() )
+            {
+                if( ! Json.contains( Key ) ) return 0;
+                return Json[Key].size();
+            }
             auto operator[]( StrView Key, std::size_t Index = 0 ) const -> std::string
             {
                 if( ! Json.contains( Key ) ) return {};
@@ -687,6 +742,40 @@ namespace EasyFCGI
                 }
                 if( Slot.is_string() ) return Slot.template get<std::string>();
                 return Slot.dump();
+            }
+        };
+
+        struct Cookie
+        {
+            FCGX_ParamArray EnvPtr;
+            auto operator[]( StrView Key ) const -> StrView
+            {
+                if( EnvPtr == nullptr ) return {};
+                using namespace ParseUtil;
+                auto CookieField = FCGX_GetParam( "HTTP_COOKIE", EnvPtr );
+                if( CookieField == nullptr ) return {};
+                for( auto Entry : CookieField | SplitBy( ';' ) )
+                    for( auto [K, V] : Entry | SplitOnceBy( '=' ) | VIEW::transform( TrimSpace ) | VIEW::pairwise )
+                        if( K == Key ) return V;
+                return {};
+            }
+        };
+
+        struct Header
+        {
+            FCGX_ParamArray EnvPtr;
+            auto operator[]( StrView Key ) const -> StrView
+            {
+                if( EnvPtr == nullptr ) return {};
+                auto FullHeaderKey = "HTTP_{}"_FMT( Key );
+                for( auto& C : FullHeaderKey )
+                {
+                    if( C == '-' ) C = '_';
+                    C = std::toupper( C );
+                }
+                auto Result = FCGX_GetParam( FullHeaderKey.c_str(), EnvPtr );
+                if( Result == nullptr ) return {};
+                return Result;
             }
         };
 
@@ -751,19 +840,15 @@ namespace EasyFCGI
             }
         };
 
+        struct Response Response;  // elaborated-type-specifier, silencing -Wchanges-meaning
+        struct Files Files;
+        std::string Payload;
+        struct Query Query;
+        struct Header Header;
+        struct Cookie Cookie;
         std::unique_ptr<FCGX_Request, FCGX_Request_Deleter> FCGX_Request_Ptr;
         HTTP::RequestMethod Method;
         HTTP::ContentType ContentType;
-        QueryExecutor<Json> Query;
-        struct Files Files;
-        std::string Body;
-
-        // std::size_t ContentLength;
-        // std::string_view ScriptName;
-        // std::string_view RequestURI;
-        // std::string_view QueryString;
-        // std::string_view Body;
-        struct Response Response;  // elaborated-type-specifier, silencing -Wchanges-meaning
 
         // Read FCGI envirnoment variables set up by upstream server
         auto GetParam( StrView ParamName ) const -> StrView
@@ -773,24 +858,36 @@ namespace EasyFCGI
             else return Result;
         }
 
+        auto AllHeaderEntries() const
+        {
+            auto Result = std::vector<std::string_view>{};
+            Result.reserve( 100 );
+
+            for( auto EnvP = FCGX_Request_Ptr->envp; EnvP != nullptr && *EnvP != nullptr; ++EnvP ) { Result.push_back( *EnvP ); }
+
+            return Result;
+        }
+
         auto Parse() -> int
         {
             using namespace ParseUtil;
             Query.Json = {};  // .clear() cannot reset residual discarded state
             Files.Storage.clear();
-            Body.clear();
+            Payload.clear();
 
+            Header.EnvPtr = FCGX_Request_Ptr->envp;
+            Cookie.EnvPtr = FCGX_Request_Ptr->envp;
+            
             Method = GetParam( "REQUEST_METHOD" );
             ContentType = GetParam( "CONTENT_TYPE" );
 
-            Body.resize_and_overwrite( GetParam( "CONTENT_LENGTH" ) | ConvertTo<int> | FallBack( 0 ),    //
-                                       [Stream = FCGX_Request_Ptr->in]( char* Buffer, std::size_t N ) {  //
-                                           return FCGX_GetStr( Buffer, N, Stream );
-                                       } );
+            Payload.resize_and_overwrite( GetParam( "CONTENT_LENGTH" ) | ConvertTo<int> | FallBack( 0 ),    //
+                                          [Stream = FCGX_Request_Ptr->in]( char* Buffer, std::size_t N ) {  //
+                                              return FCGX_GetStr( Buffer, N, Stream );
+                                          } );
 
             auto QueryAppend = [&Result = Query.Json]( std::string_view Key, auto&& Value ) {
-                if( Key.empty() ) return;
-                Result[Key].push_back( std::forward<decltype( Value )>( Value ) );
+                if( ! Key.empty() ) Result[Key].push_back( std::forward<decltype( Value )>( Value ) );
             };
 
             {
@@ -805,42 +902,55 @@ namespace EasyFCGI
                     default : break;
                     case HTTP::ContentType::Application::FormURLEncoded :
                     {
-                        for( auto Segment : Body | SplitBy( '&' ) )
+                        for( auto Segment : Payload | SplitBy( '&' ) )
                             for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
                                 QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
                         break;
                     }
                     case HTTP::ContentType::MultiPart::FormData :
                     {
-                        const auto BetweenQuote = Between( '"', '"' );
-                        auto Boundary = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
-                        auto FullBody = Body | TrimSpace;
-                        if( FullBody.ends_with( "--" ) ) FullBody.remove_suffix( 2 );
-                        for( auto&& Section : FullBody | SplitBy( Boundary ) | VIEW::drop( 1 ) )
-                        {
-                            auto Header = Section | Before( "\r\n\r\n" );
-                            auto ContentBody = Section | After( "\r\n\r\n" );
+                        auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
+                        auto ExtendedBoundaryPattern = "\r\n--{}\r\nContent-Disposition: form-data; name="_FMT( BoundaryPattern );
 
-                            auto Name = Header | After( "name=" ) | BetweenQuote;
-                            if( Name.empty() ) break;  // should never happen ?
+                        // remove trailing boundary
+                        auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
+                        if( PayloadView.empty() ) break;
+
+                        auto NameFieldPrefix = StrView{ "name=" };
+                        BoundaryPattern = ExtendedBoundaryPattern;
+                        if( PayloadView.starts_with( BoundaryPattern.substr( 2 ) ) )  // enable ExtendedBoundaryPattern
+                            NameFieldPrefix = NameFieldPrefix | CollapseToEnd;
+                        else                                                          // fallback to standard
+                            BoundaryPattern = BoundaryPattern | Before( "Content-Disposition" );
+
+                        PayloadView = PayloadView | TrimLeading( BoundaryPattern.substr( 2 ) );
+
+                        // at this point, PayloadView does not contain BoundaryPattern on both ends.
+
+                        for( auto&& Body : PayloadView | SplitBy( BoundaryPattern ) )
+                        {
+                            auto [Header, Content] = Body | SplitOnceBy( "\r\n\r\n" );
+
+                            const auto BetweenQuote = Between( '"', '"' );
+                            auto Name = Header | After( NameFieldPrefix ) | BetweenQuote;
+                            if( Name.empty() ) break;  // should never happen?
                             auto FileName = Header | After( "filename=" ) | BetweenQuote;
                             auto ContentType = Header | After( "\r\n" ) | After( "Content-Type:" ) | TrimSpace;
 
-                            if( ContentBody.ends_with( "\r\n--" ) ) ContentBody.remove_suffix( 4 );
-                            if( ContentType.empty() ) { QueryAppend( Name, ContentBody ); }
+                            if( ContentType.empty() ) { QueryAppend( Name, Content ); }
                             else
                             {
                                 QueryAppend( Name, FileName );
-                                if( ! FileName.empty() || ! ContentBody.empty() )  //
-                                    Files.Storage[Name].emplace_back( FileName, ContentType, ContentBody );
+                                if( ! FileName.empty() || ! Content.empty() )  //
+                                    Files.Storage[Name].emplace_back( FileName, ContentType, Content );
                             }
                         }
                         break;
                     }
                     case HTTP::ContentType::Application::Json :
                     {
-                        Query.Json = Json::parse( Body, nullptr, false );  // disable exception
-                        if( Query.Json.is_discarded() )                    // parse error
+                        Query.Json = Json::parse( Payload, nullptr, false );  // disable exception
+                        if( Query.Json.is_discarded() )                       // parse error
                         {
                             // early response with error message
                             // caller does not see this iteration
@@ -854,7 +964,8 @@ namespace EasyFCGI
 
                             std::println(
                                 "Request Comes with invalid Json.\n"
-                                "Responding 400 Bad Request.\nAccepting new request..." );
+                                "Responding 400 Bad Request.\n"
+                                "Ready to accept new request..." );
 
                             // re-using FCGX_Request struct, parse again
                             if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
@@ -907,8 +1018,10 @@ namespace EasyFCGI
             {
                 SendLine( "Status: {}"_FMT( std::to_underlying( Response.StatusCode ) ) );
                 SendLine( "Content-Type: {}; charset=UTF-8"_FMT( Response.ContentType.EnumLiteral() ) );
+                for( auto&& [K, V] : Response.Header.Cookies ) SendLine( "Set-Cookie: {}={}"_FMT( K, V ) );
+                for( auto&& [K, V] : Response.Header.Entries ) SendLine( "{}: {}"_FMT( K, V ) );
                 SendLine();
-                RNG::for_each( Response.Body, SendLine );
+                SendLine( Response.Body );
             }
             // Response.Reset();  // seems not necessary anymore
         }
