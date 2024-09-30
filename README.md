@@ -55,6 +55,16 @@
 > auto UploadFileName = UploadFile.FileName;
 > auto UploadFileSize = UploadFile.ContentBody.size();
 > auto SavedLocation  = UploadFile.SaveAs( "your/save/destination" );
+>
+> auto CustomHeader = Request.Header["Custom-Header"];
+> auto MyCookie123  = Request.Cookie["MyCookie123"];
+>
+> auto& Response = Request.Response;
+> Response.Set( HTTP::ContentType::Text::HTML );
+> Response.SetCookie( "MyCookie123", "haha; Max-Age=3600" );
+> Response.Cookie["MyOtherCookie123"] = "foobar; Secure; HttpOnly";
+> Response.SetHeader( "Some-Random-Header", "blahblahaabl" );
+> Response.Header["Some-Other-Random-Header"] = "asdfjbkljsdabf";
 > ```
 ---
 
