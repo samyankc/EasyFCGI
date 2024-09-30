@@ -60,11 +60,15 @@
 > auto MyCookie123  = Request.Cookie["MyCookie123"];
 >
 > auto& Response = Request.Response;
-> Response.Set( HTTP::ContentType::Text::HTML );
+> Response.Set( HTTP::ContentType::Text::EventStream );
 > Response.SetCookie( "MyCookie123", "haha; Max-Age=3600" );
 > Response.Cookie["MyOtherCookie123"] = "foobar; Secure; HttpOnly";
 > Response.SetHeader( "Some-Random-Header", "blahblahaabl" );
 > Response.Header["Some-Other-Random-Header"] = "asdfjbkljsdabf";
+>
+> Request.FlushHeader();
+> Response = "data: SSE message\r\n\r\n";
+> Request.FlushResponse();
 > ```
 ---
 
