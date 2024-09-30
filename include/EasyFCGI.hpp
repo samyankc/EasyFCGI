@@ -407,6 +407,7 @@ namespace HTTP
     };
 
     enum class StatusCode : unsigned short {
+        HeaderAlreadySent = 0,
         OK = 200,
         Created = 201,
         Accepted = 202,
@@ -431,6 +432,7 @@ namespace HTTP
             TEXT_XML,
             TEXT_CSV,
             TEXT_CSS,
+            TEXT_EVENT_STREAM,
             APPLICATION_JSON,
             APPLICATION_X_WWW_FORM_URLENCODED,
             APPLICATION_OCTET_STREAM,
@@ -448,6 +450,7 @@ namespace HTTP
             if( TypeName == "text/xml" ) return TEXT_XML;
             if( TypeName == "text/csv" ) return TEXT_CSV;
             if( TypeName == "text/css" ) return TEXT_CSS;
+            if( TypeName == "text/event-stream" ) return TEXT_EVENT_STREAM;
             if( TypeName == "application/json" ) return APPLICATION_JSON;
             if( TypeName == "application/x-www-form-urlencoded" ) return APPLICATION_X_WWW_FORM_URLENCODED;
             if( TypeName == "application/octet-stream" ) return APPLICATION_OCTET_STREAM;
@@ -466,6 +469,7 @@ namespace HTTP
                 case TEXT_XML :                          return "text/xml";
                 case TEXT_CSV :                          return "text/csv";
                 case TEXT_CSS :                          return "text/css";
+                case TEXT_EVENT_STREAM :                 return "text/event-stream";
                 case APPLICATION_JSON :                  return "application/json";
                 case APPLICATION_X_WWW_FORM_URLENCODED : return "application/x-www-form-urlencoded";
                 case APPLICATION_OCTET_STREAM :          return "application/octet-stream";
@@ -502,6 +506,7 @@ namespace HTTP
         constexpr static ContentType XML = EnumValue::TEXT_XML;
         constexpr static ContentType CSV = EnumValue::TEXT_CSV;
         constexpr static ContentType CSS = EnumValue::TEXT_CSS;
+        constexpr static ContentType EventStream = EnumValue::TEXT_EVENT_STREAM;
     };
 
     struct ContentType::Application
@@ -645,41 +650,22 @@ namespace EasyFCGI
 
     struct Response
     {
-        struct Header
-        {
-            std::map<std::string, std::string> Cookies;
-            std::map<std::string, std::string> Entries;
-            [[maybe_unused]] decltype( auto ) clear()
-            {
-                Cookies.clear();
-                Entries.clear();
-                return *this;
-            }
-            [[maybe_unused]] decltype( auto ) Reset() { return clear(); }
-        };
-
-        struct Body : std::string
-        {
-            using std::string::string;
-            using std::string::operator=;
-            using std::string::operator+=;
-        };
-
         HTTP::StatusCode StatusCode{ HTTP::StatusCode::OK };
         HTTP::ContentType ContentType{ HTTP::ContentType::Text::Plain };
-        struct Header Header;
-        struct Body Body;
+        std::map<std::string, std::string> Header;
+        std::map<std::string, std::string> Cookie;
+        std::string Body;
 
         [[maybe_unused]] decltype( auto ) Set( HTTP::StatusCode NewValue ) { return StatusCode = NewValue, *this; }
         [[maybe_unused]] decltype( auto ) Set( HTTP::ContentType NewValue ) { return ContentType = NewValue, *this; }
         [[maybe_unused]] decltype( auto ) SetHeader( const std::string& Key, auto&& Value )
         {
-            Header.Entries[Key] = std::forward<decltype( Value )>( Value );
+            Header[Key] = std::forward<decltype( Value )>( Value );
             return *this;
         }
         [[maybe_unused]] decltype( auto ) SetCookie( const std::string& Key, auto&& Value )
         {
-            Header.Cookies[Key] = std::forward<decltype( Value )>( Value );
+            Cookie[Key] = std::forward<decltype( Value )>( Value );
             return *this;
         }
         [[maybe_unused]] decltype( auto ) Reset()
@@ -687,6 +673,7 @@ namespace EasyFCGI
             Set( HTTP::StatusCode::OK );
             Set( HTTP::ContentType::Text::Plain );
             Header.clear();
+            Cookie.clear();
             Body.clear();
             return *this;
         }
@@ -1011,32 +998,76 @@ namespace EasyFCGI
 
         auto operator[]( StrView Key ) const { return Query[Key]; }
 
-        auto FlushResponse() -> void
+        struct OutputIt
         {
-            auto SendLine = [out = FCGX_Request_Ptr->out]( StrView Content = {} ) {
-                if( ! Content.empty() ) FCGX_PutStr( Content.data(), Content.length(), out );
-                FCGX_PutS( "\r\n", out );
-            };
+            using difference_type = std::ptrdiff_t;
+            FCGX_Stream* Out;
+            auto operator*() const { return *this; }
+            auto& operator++() & { return *this; }
+            auto operator++( int ) const { return *this; }
+            auto operator=( char C ) const { return FCGX_PutChar( C, Out ), C; }
+        };
+
+        auto Send( StrView Content ) const
+        {
+            if( Content.empty() ) return;
+            FCGX_PutStr( Content.data(), Content.length(), FCGX_Request_Ptr->out );
+        }
+
+        auto SendLine( StrView Content = {} ) const
+        {
+            Send( Content );
+            Send( "\r\n" );
+        }
+
+        template<typename... Args> requires( sizeof...( Args ) > 0 )               //
+        auto Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
+        {
+            std::format_to( OutputIt{ FCGX_Request_Ptr->out }, fmt, std::forward<Args>( args )... );
+            // Send( std::format( fmt, std::forward<Args>( args )... ) );
+        }
+
+        template<typename... Args> requires( sizeof...( Args ) > 0 )                   //
+        auto SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
+        {
+            std::format_to( OutputIt{ FCGX_Request_Ptr->out }, fmt, std::forward<Args>( args )... );
+            // Send( fmt, std::forward<Args>( args )... );
+            SendLine();
+        }
+
+        auto FlushHeader()
+        {
+            auto StatusCode = Response.StatusCode;
+            if( Response.StatusCode == HTTP::StatusCode::HeaderAlreadySent ) return StatusCode;
             if( Response.StatusCode == HTTP::StatusCode::NoContent )  //
             {
                 SendLine( "Status: 204\r\n" );
             }
             else
             {
-                SendLine( "Status: {}"_FMT( std::to_underlying( Response.StatusCode ) ) );
-                SendLine( "Content-Type: {}; charset=UTF-8"_FMT( Response.ContentType.EnumLiteral() ) );
-                for( auto&& [K, V] : Response.Header.Cookies ) SendLine( "Set-Cookie: {}={}"_FMT( K, V ) );
-                for( auto&& [K, V] : Response.Header.Entries ) SendLine( "{}: {}"_FMT( K, V ) );
-                SendLine();
-                SendLine( Response.Body );
+                SendLine( "Status: {}", std::to_underlying( Response.StatusCode ) );
+                SendLine( "Content-Type: {}; charset=UTF-8", Response.ContentType.EnumLiteral() );
             }
-            // Response.Reset();  // seems not necessary anymore
+            for( auto&& [K, V] : Response.Cookie ) SendLine( "Set-Cookie: {}={}", K, V );
+            for( auto&& [K, V] : Response.Header ) SendLine( "{}: {}", K, V );
+            SendLine();
+            FCGX_FFlush( FCGX_Request_Ptr->out );
+            Response.StatusCode = HTTP::StatusCode::HeaderAlreadySent;
+            return StatusCode;
+        }
+
+        auto FlushResponse() -> void
+        {
+            Send( Response.Body );
+            FCGX_FFlush( FCGX_Request_Ptr->out );
+            Response.Body.clear();
         }
 
         virtual ~Request()
         {
             if( FCGX_Request_Ptr == nullptr ) return;
-            std::println( "{} , {} Request Destruction...", getpid(), std::this_thread::get_id() );
+            std::println( "{} , {} Request Termination...", getpid(), std::this_thread::get_id() );
+            if( FlushHeader() == HTTP::StatusCode::NoContent ) return;
             FlushResponse();
         }
     };
