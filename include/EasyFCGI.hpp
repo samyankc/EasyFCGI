@@ -1078,15 +1078,19 @@ namespace EasyFCGI
 
         auto operator[]( StrView Key ) const { return Query[Key]; }
 
-        struct OutputIt
+        auto OutputIterator() const
         {
-            using difference_type = std::ptrdiff_t;
-            FCGX_Stream* Out;
-            auto operator*() const { return *this; }
-            auto& operator++() & { return *this; }
-            auto operator++( int ) const { return *this; }
-            auto operator=( char C ) const { return FCGX_PutChar( C, Out ); }
-        };
+            struct OutIt
+            {
+                using difference_type = std::ptrdiff_t;
+                FCGX_Stream* Out;
+                auto operator*() const { return *this; }
+                auto& operator++() & { return *this; }
+                auto operator++( int ) const { return *this; }
+                auto operator=( char C ) const { return FCGX_PutChar( C, Out ); }
+            };
+            return OutIt{ FCGX_Request_Ptr->out };
+        }
 
         auto Send( StrView Content ) const
         {
@@ -1104,7 +1108,7 @@ namespace EasyFCGI
         requires( sizeof...( Args ) > 0 )                                          //
         auto Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
         {
-            std::format_to( OutputIt{ FCGX_Request_Ptr->out }, fmt, std::forward<Args>( args )... );
+            std::format_to( OutputIterator(), fmt, std::forward<Args>( args )... );
             // Send( std::format( fmt, std::forward<Args>( args )... ) );
         }
 
@@ -1112,7 +1116,7 @@ namespace EasyFCGI
         requires( sizeof...( Args ) > 0 )                                              //
         auto SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
         {
-            std::format_to( OutputIt{ FCGX_Request_Ptr->out }, fmt, std::forward<Args>( args )... );
+            std::format_to( OutputIterator(), fmt, std::forward<Args>( args )... );
             // Send( fmt, std::forward<Args>( args )... );
             SendLine();
         }
