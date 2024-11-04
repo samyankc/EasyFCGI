@@ -17,15 +17,14 @@
 #include <sys/un.h>
 #include <sys/poll.h>
 #include <thread>
+#include <stop_token>
 #include "json.hpp"
 
 using namespace std::chrono_literals;
-
+using namespace std::string_literals;
+using namespace std::string_view_literals;
 namespace ParseUtil
 {
-    using namespace std::string_literals;
-    using namespace std::string_view_literals;
-
     namespace RNG = std::ranges;
     namespace VIEW = std::views;
 
@@ -385,10 +384,6 @@ namespace ParseUtil
     }
 };  // namespace ParseUtil
 
-using ParseUtil::operator""_FMT;
-
-// template<> inline constexpr bool std::ranges::enable_borrowed_range<ParseUtil::SplitByViews> = true;
-
 namespace HTTP
 {
     namespace PU = ParseUtil;
@@ -417,40 +412,45 @@ namespace HTTP
         EnumValue Verb;
         using enum EnumValue;
 
+#define RETURN_IF( N ) \
+    if( VerbName == #N ) return N
         static constexpr auto FromStringView( std::string_view VerbName )
         {
-            if( VerbName == "GET" ) return GET;
-            if( VerbName == "PUT" ) return PUT;
-            if( VerbName == "POST" ) return POST;
-            if( VerbName == "HEAD" ) return HEAD;
-            if( VerbName == "PATCH" ) return PATCH;
-            if( VerbName == "TRACE" ) return TRACE;
-            if( VerbName == "DELETE" ) return DELETE;
-            if( VerbName == "OPTIONS" ) return OPTIONS;
-            if( VerbName == "CONNECT" ) return CONNECT;
+            RETURN_IF( GET );
+            RETURN_IF( PUT );
+            RETURN_IF( POST );
+            RETURN_IF( HEAD );
+            RETURN_IF( PATCH );
+            RETURN_IF( TRACE );
+            RETURN_IF( DELETE );
+            RETURN_IF( OPTIONS );
+            RETURN_IF( CONNECT );
+            RETURN_IF( INVALID );
             return INVALID;
         }
+#undef RETURN_IF
 
-#define CASE_RETURN( N ) \
+#define RETURN_CASE( N ) \
     case N : return #N
         static constexpr auto ToStringView( EnumValue Verb ) -> std::string_view
         {
             switch( Verb )
             {
-                CASE_RETURN( GET );
-                CASE_RETURN( PUT );
-                CASE_RETURN( POST );
-                CASE_RETURN( HEAD );
-                CASE_RETURN( PATCH );
-                CASE_RETURN( TRACE );
-                CASE_RETURN( DELETE );
-                CASE_RETURN( CONNECT );
-                CASE_RETURN( OPTIONS );
-                default : CASE_RETURN( INVALID );
+                RETURN_CASE( GET );
+                RETURN_CASE( PUT );
+                RETURN_CASE( POST );
+                RETURN_CASE( HEAD );
+                RETURN_CASE( PATCH );
+                RETURN_CASE( TRACE );
+                RETURN_CASE( DELETE );
+                RETURN_CASE( CONNECT );
+                RETURN_CASE( OPTIONS );
+                RETURN_CASE( INVALID );
+                default : return "INVALID";
             }
             std::unreachable();
         }
-#undef CASE_RETURN
+#undef RETURN_CASE
 
         constexpr RequestMethod() = default;
         constexpr RequestMethod( const RequestMethod& ) = default;
@@ -570,6 +570,7 @@ namespace EasyFCGI
     namespace VIEW = std::views;
     using Json = nlohmann::json;
     using StrView = std::string_view;
+    using ParseUtil::operator""_FMT;
 
     inline namespace Concept
     {
@@ -617,6 +618,8 @@ namespace EasyFCGI
                     return OptionArg;
             return {};
         }();
+
+        inline static std::function<void( int )> ClientSpaceSignalHandler{};
     };
 
     struct ScopedTimer
@@ -629,21 +632,34 @@ namespace EasyFCGI
         std::string Marker;
         std::size_t ID;
         ScopedTimer( std::convertible_to<std::string> auto&& Marker = "" )  //
-            : StartTime{ Clock::now() },
-              Marker{ Marker },
-              ID{ ++LatestTimerID }
+            : StartTime{ Silent ? Clock::time_point{} : Clock::now() },
+              Marker{ Silent ? "" : Marker },
+              ID{ Silent ? 0 : ++LatestTimerID }
         {
-            if( Silent ) return;
-            std::println( "[ ScopedTimer {:2} ] | <{}> | Start ", ID, Marker );
+            if constexpr( Silent ) { return; }
+            else { std::println( "[ ScopedTimer {:2} ] | <{}> | Start ", ID, Marker ); }
         }
         ~ScopedTimer()
         {
-            if( Silent ) return;
-            std::println( "[ ScopedTimer {:2} ] | <{}> | End | {:%M min %S sec}  Elapsed ", ID, Marker, Clock::now() - StartTime );
+            if constexpr( Silent ) { return; }
+            else { std::println( "[ ScopedTimer {:2} ] | <{}> | End | {:%M min %S sec}  Elapsed ", ID, Marker, Clock::now() - StartTime ); }
         }
     };
 
-    static auto TerminationSignal = std::atomic<bool>{ false };
+    // static auto TerminationSignal = std::atomic<bool>{ false };
+
+    static auto TerminationSource = std::stop_source{};
+    static auto TerminationToken = TerminationSource.get_token();
+    // static struct TerminationSignal_Impl : std::stop_token
+    // {
+    //     operator bool() const { return stop_requested(); }
+    //     bool operator()() const { return stop_requested(); }
+    //     bool load() const { return stop_requested(); }
+    //     auto store( bool Stop ) const
+    //     {
+    //         if( Stop ) TerminationSource.request_stop();
+    //     }
+    // } TerminationToken{ TerminationSource.get_token() };
 
     extern "C" void OS_LibShutdown();  // for omitting #include <fcgios.h>
     static auto ServerInitialization = [] {
@@ -658,16 +674,17 @@ namespace EasyFCGI
                 std::println(
                     "Porgram exiting from standard exit pathway.\n"
                     "Termination Signal : {}",
-                    TerminationSignal.load() );
+                    TerminationToken.stop_requested() );
             } );
 
             struct sigaction SignalAction;
             sigemptyset( &SignalAction.sa_mask );
             SignalAction.sa_flags = 0;  // disable SA_RESTART
             SignalAction.sa_handler = []( int Signal ) {
-                TerminationSignal = true;
+                TerminationSource.request_stop();
                 FCGX_ShutdownPending();
                 std::println( "\nReceiving Signal : {}", Signal );
+                if( Config::ClientSpaceSignalHandler ) Config::ClientSpaceSignalHandler( Signal );
             };
             ::sigaction( SIGINT, &SignalAction, nullptr );
             ::sigaction( SIGTERM, &SignalAction, nullptr );
@@ -849,6 +866,7 @@ namespace EasyFCGI
 
             struct FileView
             {
+                using enum OverWriteOptions;
                 StrView FileName;
                 StrView ContentType;
                 StrView ContentBody;
@@ -866,7 +884,7 @@ namespace EasyFCGI
                     return ResultPath;
                 }
 
-                auto SaveAs( const FS::path& Path, const OverWriteOptions OverWriteOption = OverWriteOptions::Abort ) const -> FS::path
+                auto SaveAs( const FS::path& Path, const OverWriteOptions OverWriteOption = OverWriteOptions::Abort ) const -> std::optional<FS::path>
                 {
                     auto ParentDir = Path.parent_path();
                     if( ! FS::exists( ParentDir ) ) FS::create_directories( ParentDir );
@@ -876,7 +894,7 @@ namespace EasyFCGI
                         switch( OverWriteOption )
                         {
                             using enum OverWriteOptions;
-                            case Abort :         return ResultPath;
+                            case Abort :         return std::nullopt;
                             case OverWrite :     break;
                             case RenameOldFile : FS::rename( Path, NewFilePath( Path ) ); break;
                             case RenameNewFile : ResultPath = NewFilePath( Path ); break;
@@ -1067,7 +1085,7 @@ namespace EasyFCGI
             FCGX_InitRequest( Request_Ptr, {}, {} );
             FCGX_Request_Ptr.reset();
 
-            if( TerminationSignal.load() ) std::println( "Interrupted FCGX_Accept_r()." );
+            if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
         }
 
         static auto AcceptFrom( auto&&... args ) { return Request{ std::forward<decltype( args )>( args )... }; }
@@ -1076,7 +1094,7 @@ namespace EasyFCGI
 
         auto empty() const { return FCGX_Request_Ptr == nullptr; }
 
-        auto operator[]( StrView Key ) const { return Query[Key]; }
+        auto operator[]( StrView Key, std::size_t Index = 0 ) const { return Query[Key, Index]; }
 
         auto OutputIterator() const
         {
@@ -1094,7 +1112,7 @@ namespace EasyFCGI
 
         auto Send( StrView Content ) const
         {
-            if( Content.empty() ) return;
+            if( Content.empty() || FCGX_Request_Ptr == nullptr ) return;
             FCGX_PutStr( Content.data(), Content.length(), FCGX_Request_Ptr->out );
         }
 
@@ -1108,16 +1126,15 @@ namespace EasyFCGI
         requires( sizeof...( Args ) > 0 )                                          //
         auto Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
         {
+            if( FCGX_Request_Ptr == nullptr ) return;
             std::format_to( OutputIterator(), fmt, std::forward<Args>( args )... );
-            // Send( std::format( fmt, std::forward<Args>( args )... ) );
         }
 
         template<typename... Args>
         requires( sizeof...( Args ) > 0 )                                              //
         auto SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
         {
-            std::format_to( OutputIterator(), fmt, std::forward<Args>( args )... );
-            // Send( fmt, std::forward<Args>( args )... );
+            Send( fmt, std::forward<Args>( args )... );
             SendLine();
         }
 
@@ -1151,12 +1168,12 @@ namespace EasyFCGI
             return FlushResult;
         }
 
+        auto EarlyFinish() { std::exchange( *this, {} ); }
+
         virtual ~Request()
         {
             if( ! FCGX_Request_Ptr ) return;
-            std::println( "ID: [ {:2},{:2} ] Request Complete...",  //
-                          FCGX_Request_Ptr->ipcFd,                  //
-                          FCGX_Request_Ptr->requestId );
+            // std::println( "ID: [ {:2},{:2} ] Request Complete...", FCGX_Request_Ptr->ipcFd, FCGX_Request_Ptr->requestId );
             if( FlushHeader() != HTTP::StatusCode::NoContent ) FlushResponse();
             FCGX_Finish_r( FCGX_Request_Ptr.get() );
             if( ReusableFD_Ptr && FCGX_Request_Ptr->ipcFd != -1 ) ReusableFD_Ptr->Store( FCGX_Request_Ptr->ipcFd );
@@ -1249,22 +1266,18 @@ namespace EasyFCGI
     {
         typedef struct FCGX_Stream_Data
         {
-            unsigned char* buff;      /* buffer after alignment */
-            int bufflen;              /* number of bytes buff can store */
-            unsigned char* mBuff;     /* buffer as returned by Malloc */
-            unsigned char* buffStop;  /* reader: last valid byte + 1 of entire buffer.
-                               * stop generally differs from buffStop for
-                               * readers because of record structure.
-                               * writer: buff + bufflen */
-            int type;                 /* reader: FCGI_PARAMS or FCGI_STDIN
-                               * writer: FCGI_STDOUT or FCGI_STDERR */
-            int eorStop;              /* reader: stop stream at end-of-record */
-            int skip;                 /* reader: don't deliver content bytes */
-            int contentLen;           /* reader: bytes of unread content */
-            int paddingLen;           /* reader: bytes of unread padding */
-            int isAnythingWritten;    /* writer: data has been written to ipcFd */
-            int rawWrite;             /* writer: write data without stream headers */
-            FCGX_Request* reqDataPtr; /* request data not specific to one stream */
+            unsigned char* buff;
+            int bufflen;
+            unsigned char* mBuff;
+            unsigned char* buffStop;
+            int type;
+            int eorStop;
+            int skip;
+            int contentLen;
+            int paddingLen;
+            int isAnythingWritten;
+            int rawWrite;
+            FCGX_Request* reqDataPtr;
         } FCGX_Stream_Data;
     }  // namespace DebugInfo
 
