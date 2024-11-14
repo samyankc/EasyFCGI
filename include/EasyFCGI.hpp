@@ -410,12 +410,12 @@ namespace HTTP
     {
         enum class EnumValue : unsigned short { INVALID, GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH };
         EnumValue Verb;
-        using enum EnumValue;
 
 #define RETURN_IF( N ) \
     if( VerbName == #N ) return N
         static constexpr auto FromStringView( std::string_view VerbName )
         {
+            using enum EnumValue;
             RETURN_IF( GET );
             RETURN_IF( PUT );
             RETURN_IF( POST );
@@ -436,6 +436,7 @@ namespace HTTP
         {
             switch( Verb )
             {
+                using enum EnumValue;
                 RETURN_CASE( GET );
                 RETURN_CASE( PUT );
                 RETURN_CASE( POST );
@@ -455,13 +456,31 @@ namespace HTTP
         constexpr RequestMethod() = default;
         constexpr RequestMethod( const RequestMethod& ) = default;
         constexpr RequestMethod( EnumValue OtherVerb ) : Verb{ OtherVerb } {}
-        constexpr RequestMethod( std::string_view VerbName ) : Verb{ FromStringView( VerbName ) } {}
+        constexpr RequestMethod( std::string_view VerbName ) : RequestMethod( FromStringView( VerbName ) ) {}
 
         constexpr operator std::string_view() const { return ToStringView( Verb ); }
         constexpr auto EnumLiteral() const { return ToStringView( Verb ); }
 
         constexpr operator EnumValue() const { return Verb; }
     };
+
+    // for better auto completion
+    namespace Request
+    {
+        inline namespace Method
+        {
+            constexpr RequestMethod INVALID{ RequestMethod::EnumValue::INVALID };
+            constexpr RequestMethod GET{ RequestMethod::EnumValue::GET };
+            constexpr RequestMethod HEAD{ RequestMethod::EnumValue::HEAD };
+            constexpr RequestMethod POST{ RequestMethod::EnumValue::POST };
+            constexpr RequestMethod PUT{ RequestMethod::EnumValue::PUT };
+            constexpr RequestMethod DELETE{ RequestMethod::EnumValue::DELETE };
+            constexpr RequestMethod CONNECT{ RequestMethod::EnumValue::CONNECT };
+            constexpr RequestMethod OPTIONS{ RequestMethod::EnumValue::OPTIONS };
+            constexpr RequestMethod TRACE{ RequestMethod::EnumValue::TRACE };
+            constexpr RequestMethod PATCH{ RequestMethod::EnumValue::PATCH };
+        }  // namespace Method
+    };  // namespace Request
 
     struct ContentType
     {
@@ -520,10 +539,6 @@ namespace HTTP
             return "";
         }
 
-        struct Text;
-        struct Application;
-        struct MultiPart;
-
         constexpr ContentType() = default;
         constexpr ContentType( const ContentType& ) = default;
         constexpr ContentType( EnumValue Other ) : Type{ Other } {}
@@ -538,29 +553,35 @@ namespace HTTP
         constexpr operator EnumValue() const { return Type; }
     };
 
-    struct ContentType::Text
+    // for better auto completion
+    namespace Content
     {
-        constexpr static ContentType Plain = EnumValue::TEXT_PLAIN;
-        constexpr static ContentType HTML = EnumValue::TEXT_HTML;
-        constexpr static ContentType XML = EnumValue::TEXT_XML;
-        constexpr static ContentType CSV = EnumValue::TEXT_CSV;
-        constexpr static ContentType CSS = EnumValue::TEXT_CSS;
-        constexpr static ContentType EventStream = EnumValue::TEXT_EVENT_STREAM;
-    };
+        inline namespace Type
+        {
+            namespace Text
+            {
+                constexpr ContentType Plain = ContentType::EnumValue::TEXT_PLAIN;
+                constexpr ContentType HTML = ContentType::EnumValue::TEXT_HTML;
+                constexpr ContentType XML = ContentType::EnumValue::TEXT_XML;
+                constexpr ContentType CSV = ContentType::EnumValue::TEXT_CSV;
+                constexpr ContentType CSS = ContentType::EnumValue::TEXT_CSS;
+                constexpr ContentType EventStream = ContentType::EnumValue::TEXT_EVENT_STREAM;
+            }  // namespace Text
 
-    struct ContentType::Application
-    {
-        constexpr static ContentType Json = EnumValue::APPLICATION_JSON;
-        constexpr static ContentType FormURLEncoded = EnumValue::APPLICATION_X_WWW_FORM_URLENCODED;
-        constexpr static ContentType OctetStream = EnumValue::APPLICATION_OCTET_STREAM;
-    };
+            namespace Application
+            {
+                constexpr ContentType Json = ContentType::EnumValue::APPLICATION_JSON;
+                constexpr ContentType FormURLEncoded = ContentType::EnumValue::APPLICATION_X_WWW_FORM_URLENCODED;
+                constexpr ContentType OctetStream = ContentType::EnumValue::APPLICATION_OCTET_STREAM;
+            };
 
-    struct ContentType::MultiPart
-    {
-        constexpr static ContentType FormData = EnumValue::MULTIPART_FORM_DATA;
-        constexpr static ContentType ByteRanges = EnumValue::MULTIPART_BYTERANGES;
-    };
-
+            namespace MultiPart
+            {
+                constexpr ContentType FormData = ContentType::EnumValue::MULTIPART_FORM_DATA;
+                constexpr ContentType ByteRanges = ContentType::EnumValue::MULTIPART_BYTERANGES;
+            };
+        }  // namespace Type
+    }  // namespace Content
 }  // namespace HTTP
 
 namespace EasyFCGI
@@ -748,7 +769,7 @@ namespace EasyFCGI
     struct Response
     {
         HTTP::StatusCode StatusCode{ HTTP::StatusCode::OK };
-        HTTP::ContentType ContentType{ HTTP::ContentType::Text::Plain };
+        HTTP::ContentType ContentType{ HTTP::Content::Text::Plain };
         std::map<std::string, std::string> Header;
         std::map<std::string, std::string> Cookie;
         std::string Body;
@@ -768,7 +789,7 @@ namespace EasyFCGI
         [[maybe_unused]] decltype( auto ) Reset()
         {
             Set( HTTP::StatusCode::OK );
-            Set( HTTP::ContentType::Text::Plain );
+            Set( HTTP::Content::Text::Plain );            
             Header.clear();
             Cookie.clear();
             Body.clear();
@@ -932,20 +953,15 @@ namespace EasyFCGI
         // Read FCGI envirnoment variables set up by upstream server
         auto GetParam( StrView ParamName ) const -> StrView
         {
-            auto Result = FCGX_GetParam( std::data( ParamName ), FCGX_Request_Ptr->envp );
-            if( Result == nullptr )
-                return {};
-            else
-                return Result;
+            if( auto Result = FCGX_GetParam( std::data( ParamName ), FCGX_Request_Ptr->envp ) ) return Result;
+            return {};
         }
 
         auto AllHeaderEntries() const
         {
             auto Result = std::vector<std::string_view>{};
             Result.reserve( 100 );
-
             for( auto EnvP = FCGX_Request_Ptr->envp; EnvP != nullptr && *EnvP != nullptr; ++EnvP ) { Result.push_back( *EnvP ); }
-
             return Result;
         }
 
@@ -983,14 +999,14 @@ namespace EasyFCGI
                 switch( ContentType )
                 {
                     default : break;
-                    case HTTP::ContentType::Application::FormURLEncoded :
+                    case HTTP::Content::Application::FormURLEncoded :
                     {
                         for( auto Segment : Payload | SplitBy( '&' ) )
                             for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
                                 QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
                         break;
                     }
-                    case HTTP::ContentType::MultiPart::FormData :
+                    case HTTP::Content::MultiPart::FormData :
                     {
                         auto _ = ScopedTimer( "MultipartParseTime" );
                         auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
@@ -1034,11 +1050,11 @@ namespace EasyFCGI
                         }
                         break;
                     }
-                    case HTTP::ContentType::Application::Json :
+                    case HTTP::Content::Application::Json :
                     {
                         Query.Json = Json::parse( Payload, nullptr, false );  // disable exception
-                        if( Query.Json.is_discarded() )                       // parse error
-                        {
+                        if( Query.Json.is_discarded() )
+                        {  // parse error
                             // early response with error message
                             // caller does not see this iteration
                             // give caller the next request
@@ -1140,35 +1156,58 @@ namespace EasyFCGI
 
         auto FlushHeader()
         {
-            auto StatusCode = Response.StatusCode;
-            if( Response.StatusCode == HTTP::StatusCode::InternalUse_HeaderAlreadySent ) return StatusCode;
-            if( Response.StatusCode == HTTP::StatusCode::NoContent )  //
+            using enum HTTP::StatusCode;
+            switch( Response.StatusCode )
             {
-                SendLine( "Status: 204\r\n" );
+                case InternalUse_HeaderAlreadySent : return InternalUse_HeaderAlreadySent;
+                case HTTP::StatusCode::NoContent :   SendLine( "Status: 204" ); break;
+                default :
+                    SendLine( "Status: {}"_FMT( std::to_underlying( Response.StatusCode ) ) );
+                    SendLine( "Content-Type: {}; charset=UTF-8"_FMT( Response.ContentType.EnumLiteral() ) );
+                    break;
             }
-            else
-            {
-                SendLine( "Status: {}", std::to_underlying( Response.StatusCode ) );
-                SendLine( "Content-Type: {}; charset=UTF-8", Response.ContentType.EnumLiteral() );
-            }
-            for( auto&& [K, V] : Response.Cookie ) SendLine( "Set-Cookie: {}={}", K, V );
-            for( auto&& [K, V] : Response.Header ) SendLine( "{}: {}", K, V );
+
+            for( auto&& [K, V] : Response.Cookie ) SendLine( "Set-Cookie: {}={}"_FMT( K, V ) );
+            for( auto&& [K, V] : Response.Header ) SendLine( "{}: {}"_FMT( K, V ) );
             SendLine();
             FCGX_FFlush( FCGX_Request_Ptr->out );
-            Response.StatusCode = HTTP::StatusCode::InternalUse_HeaderAlreadySent;
-            return StatusCode;
+
+            return std::exchange( Response.StatusCode, InternalUse_HeaderAlreadySent );
         }
 
         auto FlushResponse()
         {
             Send( Response.Body );
-            auto FlushResult = FCGX_FFlush( FCGX_Request_Ptr->out );
             Response.Body.clear();
-            // if( FCGX_GetError( FCGX_Request_Ptr->out ) < 0 ) return -1;
-            return FlushResult;
+            return FCGX_FFlush( FCGX_Request_Ptr->out );
         }
 
         auto EarlyFinish() { std::exchange( *this, {} ); }
+
+        auto SSE_Start()
+        {
+            if( Response.StatusCode == HTTP::StatusCode::InternalUse_HeaderAlreadySent )
+            {
+                std::println( "[ Fail ] Attempting SSE_Start after header flushed. no-op." );
+                return;
+            }
+            Response
+                .Set( HTTP::StatusCode::OK )  //
+                .Set( HTTP::Content::Text::EventStream )
+                .SetHeader( "Cache-Control", "no-cache" );
+            FlushHeader();
+            FlushResponse();
+        }
+
+        auto SSE_Send( auto&&... Content ) const
+        {
+            ( Send( Content ), ... );
+            SendLine();
+            SendLine();
+            return FCGX_FFlush( FCGX_Request_Ptr->out );
+        };
+
+        auto SSE_Error() const { return FCGX_GetError( FCGX_Request_Ptr->out ); }
 
         virtual ~Request()
         {
