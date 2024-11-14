@@ -12,7 +12,7 @@
 >   for( auto Request : Server.RequestQueue ){
 >     auto& Response = Request.Response;
 >     Response.Set( HTTP::StatusCode::OK )
->             .Set( HTTP::ContentType::Text::HTML )
+>             .Set( HTTP::Content::Text::HTML )
 >             .Append( "<html><b>{}</b></html>"_FMT( "Hello World" ) );
 >   }
 > }
@@ -34,7 +34,7 @@
 >       auto& Response = Request.Response;
 >       Workload();
 >       Response.Set( HTTP::StatusCode::OK )
->               .Set( HTTP::ContentType::Text::HTML )
+>               .Set( HTTP::Content::Text::HTML )
 >               .Append( "<html><b>{}</b></html>"_FMT( "Hello World" ) );
 >     } );
 >   }
@@ -60,7 +60,7 @@
 > auto MyCookie123  = Request.Cookie["MyCookie123"];
 >
 > auto& Response = Request.Response;
-> Response.Set( HTTP::ContentType::Text::EventStream );
+> Response.Set( HTTP::Content::Text::EventStream );
 > Response.SetCookie( "MyCookie123", "haha; Max-Age=3600" );
 > Response.Cookie["MyOtherCookie123"] = "foobar; Secure; HttpOnly";
 > Response.SetHeader( "Some-Random-Header", "blahblahaabl" );
