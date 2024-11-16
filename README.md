@@ -77,5 +77,8 @@
 > - Compiler with C++26 support
 > - libfcgi
 > - nlohmann/json
+---
 
+> # Remark
+> fastcgi_keep_conn is currently only supported when paried with nginx.
 ---
