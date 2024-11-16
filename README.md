@@ -1,6 +1,7 @@
 > # EasyFCGI
-> C++26 Wrapper for libfcgi
-> Single header file
+> - C++26 Wrapper for libfcgi
+> - Single header file
+> - Do NOT require spawn-fcgi
 ---
 
 > # Quick Start Demo
