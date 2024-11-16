@@ -1,7 +1,6 @@
 > # EasyFCGI
 > C++26 Wrapper for libfcgi
 > Single header file
-
 ---
 
 > # Quick Start Demo
@@ -78,6 +77,7 @@
 > - Compiler with C++26 support
 > - libfcgi
 > - nlohmann/json
+> - NOT to be used with spawn-fcgi
 ---
 
 > # Remark
