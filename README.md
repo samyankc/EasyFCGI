@@ -18,6 +18,7 @@
 >   }
 > }
 > ```
+> ""_FMT() is a handy helper wrapper for std::format()
 
 > # How About Multithreading
 > ```c++
