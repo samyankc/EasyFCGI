@@ -17,8 +17,8 @@
 >             .Append( "<html><b>{}</b></html>"_FMT( "Hello World" ) );
 >   }
 > }
+> // ""_FMT() is a handy helper wrapper for std::format()
 > ```
-> ""_FMT() is a handy helper wrapper for std::format()
 
 > # How About Multithreading
 > ```c++
