@@ -72,7 +72,7 @@ namespace ParseUtil
 
         [[maybe_unused]] constexpr struct FrontRA : RNG::range_adaptor_closure<FrontRA>
         {
-            constexpr auto static operator()( auto&& Range ) { return *std::begin( Range ); }
+            constexpr auto static operator()( auto&& Range ) { return *RNG::begin( Range ); }
         } Front;
 
         [[maybe_unused]] constexpr struct BeginRA : RNG::range_adaptor_closure<BeginRA>
@@ -458,6 +458,7 @@ namespace HTTP
         constexpr RequestMethod( EnumValue OtherVerb ) : Verb{ OtherVerb } {}
         constexpr RequestMethod( std::string_view VerbName ) : RequestMethod( FromStringView( VerbName ) ) {}
 
+        using FormatAs = std::string_view;
         constexpr operator std::string_view() const { return ToStringView( Verb ); }
         constexpr auto EnumLiteral() const { return ToStringView( Verb ); }
 
@@ -542,11 +543,9 @@ namespace HTTP
         constexpr ContentType() = default;
         constexpr ContentType( const ContentType& ) = default;
         constexpr ContentType( EnumValue Other ) : Type{ Other } {}
-        constexpr ContentType( std::string_view TypeName ) : Type{ FromStringView( TypeName | PU::SplitBy( ';' ) | PU::Front | PU::TrimSpace ) }
-        {
-            // if( Type == UNKNOWN_MIME_TYPE ) Type = TEXT_PLAIN;
-        }
+        constexpr ContentType( std::string_view TypeName ) : Type{ FromStringView( TypeName | PU::SplitBy( ';' ) | PU::Front | PU::TrimSpace ) } {}
 
+        using FormatAs = std::string_view;
         constexpr operator std::string_view() const { return ToStringView( Type ); }
         constexpr auto EnumLiteral() const { return ToStringView( Type ); }
 
@@ -789,7 +788,7 @@ namespace EasyFCGI
         [[maybe_unused]] decltype( auto ) Reset()
         {
             Set( HTTP::StatusCode::OK );
-            Set( HTTP::Content::Text::Plain );            
+            Set( HTTP::Content::Text::Plain );
             Header.clear();
             Cookie.clear();
             Body.clear();
@@ -1321,5 +1320,16 @@ namespace EasyFCGI
     }  // namespace DebugInfo
 
 }  // namespace EasyFCGI
+
+// enable formatter for HTTP constant objects
+template<typename T>
+requires requires { typename T::FormatAs; }
+struct std::formatter<T> : std::formatter<typename T::FormatAs>
+{
+    auto format( const T& Value, std::format_context& ctx ) const  //
+    {
+        return std::formatter<typename T::FormatAs>::format( Value, ctx );
+    }
+};
 
 #endif
