@@ -1,6 +1,7 @@
 > # EasyFCGI
 > - C++26 Wrapper for libfcgi
 > - Single header file
+>   - ```-D_EASY_FCGI_SEPARATE_COMPILATION``` for separate compilation
 > - Do NOT require spawn-fcgi
 ---
 
@@ -82,5 +83,5 @@
 ---
 
 > # Remark
-> fastcgi_keep_conn is currently only supported when paried with nginx.
+> fastcgi_keep_conn is ignored due to compatibility issues
 ---
