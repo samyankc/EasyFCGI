@@ -1,5 +1,6 @@
 #ifndef _EASY_FCGI_HPP
 #define _EASY_FCGI_HPP
+
 #include <fcgiapp.h>
 #include <csignal>
 #include <memory>
@@ -18,16 +19,12 @@
 #include <sys/poll.h>
 #include <thread>
 #include <stop_token>
-#include "json.hpp"
+#include "../include/json.hpp"
 
-using namespace std::chrono_literals;
-using namespace std::string_literals;
-using namespace std::string_view_literals;
 namespace ParseUtil
 {
     namespace RNG = std::ranges;
     namespace VIEW = std::views;
-
     using StrView = std::string_view;
 
     template<std::size_t N>
@@ -134,12 +131,12 @@ namespace ParseUtil
         {
             constexpr auto operator()( StrView Input ) const -> StrView
             {
-                if consteval { return StrView{ RNG::search( Input, Pattern ) }; }
+                if consteval
+                {
+                    return StrView{ RNG::search( Input, Pattern ) };
+                }
                 else
                 {
-                    // auto Match = std::search( Input.begin(), Input.end(),  //
-                    //                           std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() ) );
-                    // return { Match, Match == Input.end() ? Match : std::next( Match, Pattern.length() ) };
                     auto [MatchBegin, MatchEnd] = std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() )( Input.begin(), Input.end() );
                     return { MatchBegin, MatchEnd };
                 }
@@ -160,12 +157,7 @@ namespace ParseUtil
 
         struct After : StrViewPattern, RNG::range_adaptor_closure<After>
         {
-            constexpr StrView operator()( StrView Input ) const
-            {
-                // auto [InputBegin, InputEnd] = Input | Boundary;
-                // auto [MatchBegin, MatchEnd] = Input | Search( Pattern ) | Boundary;
-                return { Input | Search( Pattern ) | End, Input | End };
-            }
+            constexpr StrView operator()( StrView Input ) const { return { Input | Search( Pattern ) | End, Input | End }; }
         };
 
         struct Between : RNG::range_adaptor_closure<Between>
@@ -255,35 +247,6 @@ namespace ParseUtil
             constexpr auto operator()( StrView Input ) const { return View{ Input, View::SplitterType{ *this } }; }
         };
 
-        struct SplitBy_OLD : StrViewPattern, RNG::range_adaptor_closure<SplitBy_OLD>
-        {
-            constexpr auto operator()( StrView Input ) const
-            {
-                auto Result = std::vector<StrView>();
-                Result.reserve( Count( Pattern ).In( Input ) + 1 );
-
-                auto EndsWithPattern = Input.ends_with( Pattern );
-                if consteval
-                {
-                    do std::forward_as_tuple( std::back_inserter( Result ), Input ) = Input | SplitOnceBy( Pattern );
-                    while( ! Input.empty() );
-                }
-                else
-                {
-                    auto BMH = std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() );
-                    do {
-                        auto [MatchBegin, MatchEnd] = BMH( Input.begin(), Input.end() );
-                        Result.emplace_back( Input.begin(), MatchBegin );
-                        Input = { MatchEnd, Input.end() };
-                    } while( ! Input.empty() );
-                }
-
-                if( EndsWithPattern ) Result.push_back( Input );
-
-                return Result;
-            }
-        };
-
         struct Split
         {
             StrView Input;
@@ -309,6 +272,7 @@ namespace ParseUtil
                 return std::nullopt;
             }
         };
+
         template<typename NumericType, int BASE = 10>  //
         constexpr auto ConvertTo = ConvertToRA<NumericType, BASE>{};
 
@@ -318,7 +282,7 @@ namespace ParseUtil
             NumericType N;
             constexpr FallBack( NumericType N ) : N{ N } {}
             template<typename OtherNumericType>  //
-            constexpr auto operator()( const std::optional<OtherNumericType>& Input ) const
+            constexpr auto operator()( const std::optional<OtherNumericType>& Input ) const -> OtherNumericType
             {
                 return Input.value_or( N );
             }
@@ -383,11 +347,10 @@ namespace ParseUtil
         return Result;
     }
 };  // namespace ParseUtil
+using ParseUtil::ConvertTo;
 
 namespace HTTP
 {
-    namespace PU = ParseUtil;
-
     enum class StatusCode : unsigned short {
         InternalUse_HeaderAlreadySent = 0,
         OK = 200,
@@ -461,7 +424,6 @@ namespace HTTP
         using FormatAs = std::string_view;
         constexpr operator std::string_view() const { return ToStringView( Verb ); }
         constexpr auto EnumLiteral() const { return ToStringView( Verb ); }
-
         constexpr operator EnumValue() const { return Verb; }
     };
 
@@ -504,17 +466,17 @@ namespace HTTP
         static constexpr auto FromStringView( std::string_view TypeName )
         {
             using enum EnumValue;
-            if( TypeName == "text/plain" ) return TEXT_PLAIN;
-            if( TypeName == "text/html" ) return TEXT_HTML;
-            if( TypeName == "text/xml" ) return TEXT_XML;
-            if( TypeName == "text/csv" ) return TEXT_CSV;
-            if( TypeName == "text/css" ) return TEXT_CSS;
-            if( TypeName == "text/event-stream" ) return TEXT_EVENT_STREAM;
-            if( TypeName == "application/json" ) return APPLICATION_JSON;
-            if( TypeName == "application/x-www-form-urlencoded" ) return APPLICATION_X_WWW_FORM_URLENCODED;
-            if( TypeName == "application/octet-stream" ) return APPLICATION_OCTET_STREAM;
-            if( TypeName == "multipart/form-data" ) return MULTIPART_FORM_DATA;
-            if( TypeName == "multipart/byteranges" ) return MULTIPART_BYTERANGES;
+            if( TypeName.starts_with( "text/plain" ) ) return TEXT_PLAIN;
+            if( TypeName.starts_with( "text/html" ) ) return TEXT_HTML;
+            if( TypeName.starts_with( "text/xml" ) ) return TEXT_XML;
+            if( TypeName.starts_with( "text/csv" ) ) return TEXT_CSV;
+            if( TypeName.starts_with( "text/css" ) ) return TEXT_CSS;
+            if( TypeName.starts_with( "text/event-stream" ) ) return TEXT_EVENT_STREAM;
+            if( TypeName.starts_with( "application/json" ) ) return APPLICATION_JSON;
+            if( TypeName.starts_with( "application/x-www-form-urlencoded" ) ) return APPLICATION_X_WWW_FORM_URLENCODED;
+            if( TypeName.starts_with( "application/octet-stream" ) ) return APPLICATION_OCTET_STREAM;
+            if( TypeName.starts_with( "multipart/form-data" ) ) return MULTIPART_FORM_DATA;
+            if( TypeName.starts_with( "multipart/byteranges" ) ) return MULTIPART_BYTERANGES;
             return UNKNOWN_MIME_TYPE;
         }
 
@@ -535,7 +497,7 @@ namespace HTTP
                 case MULTIPART_FORM_DATA :               return "multipart/form-data";
                 case MULTIPART_BYTERANGES :              return "multipart/byteranges";
                 // default :
-                case UNKNOWN_MIME_TYPE :                 return ToStringView( TEXT_HTML );
+                case UNKNOWN_MIME_TYPE : return ToStringView( TEXT_HTML );
             }
             return "";
         }
@@ -543,12 +505,11 @@ namespace HTTP
         constexpr ContentType() = default;
         constexpr ContentType( const ContentType& ) = default;
         constexpr ContentType( EnumValue Other ) : Type{ Other } {}
-        constexpr ContentType( std::string_view TypeName ) : Type{ FromStringView( TypeName | PU::SplitBy( ';' ) | PU::Front | PU::TrimSpace ) } {}
+        constexpr ContentType( std::string_view TypeName ) : ContentType{ FromStringView( TypeName ) } {}
 
         using FormatAs = std::string_view;
         constexpr operator std::string_view() const { return ToStringView( Type ); }
         constexpr auto EnumLiteral() const { return ToStringView( Type ); }
-
         constexpr operator EnumValue() const { return Type; }
     };
 
@@ -590,233 +551,48 @@ namespace EasyFCGI
     namespace VIEW = std::views;
     using Json = nlohmann::json;
     using StrView = std::string_view;
-    using ParseUtil::operator""_FMT;
 
-    inline namespace Concept
+#ifdef _EASY_FCGI_SEPARATE_COMPILATION
+    namespace Config
     {
-        template<typename T>
-        concept DumpingString = requires( T&& t ) {
-            { t.dump() } -> std::same_as<std::string>;
-        };
-    }
+        extern int DefaultBackLogNumber;       // evetually be capped by /proc/sys/net/core/somaxconncat,ie.4096
+        extern StrView SocketDirectoryPrefix;  // = "/dev/shm/"sv;
+        extern StrView SocketExtensionSuffix;  // = ".sock"sv;
+        FS::path DefaultSocketPath();
+        std::optional<FS::path> LaunchOptionSocketPath();
+    }  // namespace Config
 
-    struct Config
-    {
-        // evetually capped by /proc/sys/net/core/somaxconncat,eg.4096
-        constexpr static auto DefaultBackLogNumber = 128;
-
-        // static auto SocketDirectoryPrefix = StrView{"/tmp"};
-        constexpr static auto SocketDirectoryPrefix = StrView{ "/dev/shm/" };
-        constexpr static auto SocketExtensionSuffix = StrView{ ".sock" };
-
-        constexpr static auto CommandLineBufferMax = 4096uz;
-        inline static auto CommandLineBuffer = std::vector<char>{};
-        inline static auto CommandLine = [] {
-            auto Buffer = std::array<char, CommandLineBufferMax>{ '\0' };
-            auto fin = std::fopen( "/proc/self/cmdline", "rb" );
-            auto Loaded = std::fread( Buffer.data(), sizeof( Buffer[0] ), Buffer.size(), fin );
-            std::fclose( fin );
-            if( Loaded )
-            {
-                CommandLineBuffer = std::vector( Buffer.begin(), std::next( Buffer.begin(), Loaded ) );
-                CommandLineBuffer.resize( Loaded - 1 );  // bury the last \0
-            }
-
-            return VIEW::split( CommandLineBuffer, '\0' )  //
-                   | VIEW::transform( RNG::data )          //
-                   | RNG::to<std::vector>();
-        }();
-
-        inline static auto DefaultSocketPath = FS::path( Config::SocketDirectoryPrefix ) /  //
-                                               FS::path( CommandLine[0] )
-                                                   .filename()  //
-                                                   .replace_extension( Config::SocketExtensionSuffix );
-
-        inline static auto OptionSocketPath = [] -> std::optional<FS::path> {
-            for( auto&& [Option, OptionArg] : CommandLine | VIEW::pairwise )
-                if( Option == StrView{ "-s" } )  //
-                    return OptionArg;
-            return {};
-        }();
-
-        inline static std::function<void( int )> ClientSpaceSignalHandler{};
-    };
-
-    struct ScopedTimer
-    {
-        constexpr static auto Silent = true;
-        inline static std::atomic<std::size_t> LatestTimerID = 0;
-
-        using Clock = std::chrono::steady_clock;
-        Clock::time_point StartTime;
-        std::string Marker;
-        std::size_t ID;
-        ScopedTimer( std::convertible_to<std::string> auto&& Marker = "" )  //
-            : StartTime{ Silent ? Clock::time_point{} : Clock::now() },
-              Marker{ Silent ? "" : Marker },
-              ID{ Silent ? 0 : ++LatestTimerID }
-        {
-            if constexpr( Silent ) { return; }
-            else { std::println( "[ ScopedTimer {:2} ] | <{}> | Start ", ID, Marker ); }
-        }
-        ~ScopedTimer()
-        {
-            if constexpr( Silent ) { return; }
-            else { std::println( "[ ScopedTimer {:2} ] | <{}> | End | {:%M min %S sec}  Elapsed ", ID, Marker, Clock::now() - StartTime ); }
-        }
-    };
-
-    // static auto TerminationSignal = std::atomic<bool>{ false };
-
-    static auto TerminationSource = std::stop_source{};
-    static auto TerminationToken = TerminationSource.get_token();
-    // static struct TerminationSignal_Impl : std::stop_token
-    // {
-    //     operator bool() const { return stop_requested(); }
-    //     bool operator()() const { return stop_requested(); }
-    //     bool load() const { return stop_requested(); }
-    //     auto store( bool Stop ) const
-    //     {
-    //         if( Stop ) TerminationSource.request_stop();
-    //     }
-    // } TerminationToken{ TerminationSource.get_token() };
-
-    extern "C" void OS_LibShutdown();  // for omitting #include <fcgios.h>
-    static auto ServerInitialization = [] {
-        static auto ServerInitializationComplete = false;
-        if( std::exchange( ServerInitializationComplete, true ) ) return;
-
-        if( auto ErrorCode = FCGX_Init(); ErrorCode == 0 )
-        {
-            std::println( "[ OK ]  ServerInitialization : FCGX_Init" );
-            std::atexit( OS_LibShutdown );
-            std::atexit( [] {
-                std::println(
-                    "Porgram exiting from standard exit pathway.\n"
-                    "Termination Signal : {}",
-                    TerminationToken.stop_requested() );
-            } );
-
-            struct sigaction SignalAction;
-            sigemptyset( &SignalAction.sa_mask );
-            SignalAction.sa_flags = 0;  // disable SA_RESTART
-            SignalAction.sa_handler = []( int Signal ) {
-                TerminationSource.request_stop();
-                FCGX_ShutdownPending();
-                std::println( "\nReceiving Signal : {}", Signal );
-                if( Config::ClientSpaceSignalHandler ) Config::ClientSpaceSignalHandler( Signal );
-            };
-            ::sigaction( SIGINT, &SignalAction, nullptr );
-            ::sigaction( SIGTERM, &SignalAction, nullptr );
-
-            // sigemptyset( &SignalAction.sa_mask );
-            // SignalAction.sa_handler = SIG_IGN;
-            // ::sigaction( SIGPIPE, &SignalAction, nullptr );
-        }
-        else
-        {
-            std::println( "[ Fatal, Error = {} ]  ServerInitialization : FCGX_Init NOT Successful", ErrorCode );
-            std::exit( ErrorCode );
-        }
-    };
+    // extern std::stop_source TerminationSource;
+    extern std::stop_token TerminationToken;
+#endif
 
     using SocketFileDescriptor = decltype( FCGX_OpenSocket( {}, {} ) );
     using ConnectionFileDescriptor = decltype( ::accept( {}, {}, {} ) );
 
-    static auto PollFor( int FD, unsigned int Flags, int Timeout = -1 )
-    {
-        auto PollFD = pollfd{ .fd = FD, .events = static_cast<short>( Flags ), .revents = 0 };
-        return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
-    }
-
-    struct ReusableFD
-    {
-        ReusableFD()
-        {
-            if( ::pipe( PipeFD ) != 0 )
-            {
-                std::println( "Fail to create PendingFD Pipe" );
-                std::exit( 0 );
-            }
-        }
-        ~ReusableFD()
-        {
-            ::close( PipeFD[0] );
-            ::close( PipeFD[1] );
-        }
-        mutable std::mutex PipeLock;
-        int PipeFD[2];
-
-        auto Store( ConnectionFileDescriptor FD ) const
-        {
-            auto _ = std::lock_guard{ PipeLock };
-            return ::write( PipeFD[1], &FD, sizeof( FD ) );
-        }
-        auto Load() const -> std::optional<ConnectionFileDescriptor>
-        {
-            auto _ = std::lock_guard{ PipeLock };
-            if( PollFor( PipeFD[0], POLLIN, 0 ) )
-            {
-                auto FD = ConnectionFileDescriptor{};
-                if( ::read( PipeFD[0], &FD, sizeof( FD ) ) >= 0 ) return FD;
-            }
-            return std::nullopt;
-        }
-        auto empty() const { return ! PollFor( PipeFD[0], POLLIN, 0 ); }
-    };
-
     struct Response
     {
-        HTTP::StatusCode StatusCode{ HTTP::StatusCode::OK };
-        HTTP::ContentType ContentType{ HTTP::Content::Text::Plain };
+        HTTP::StatusCode StatusCode = HTTP::StatusCode::OK;
+        HTTP::ContentType ContentType = HTTP::Content::Text::HTML;
         std::map<std::string, std::string> Header;
         std::map<std::string, std::string> Cookie;
         std::string Body;
 
-        [[maybe_unused]] decltype( auto ) Set( HTTP::StatusCode NewValue ) { return StatusCode = NewValue, *this; }
-        [[maybe_unused]] decltype( auto ) Set( HTTP::ContentType NewValue ) { return ContentType = NewValue, *this; }
-        [[maybe_unused]] decltype( auto ) SetHeader( const std::string& Key, auto&& Value )
-        {
-            Header[Key] = std::forward<decltype( Value )>( Value );
-            return *this;
-        }
-        [[maybe_unused]] decltype( auto ) SetCookie( const std::string& Key, auto&& Value )
-        {
-            Cookie[Key] = std::forward<decltype( Value )>( Value );
-            return *this;
-        }
-        [[maybe_unused]] decltype( auto ) Reset()
-        {
-            Set( HTTP::StatusCode::OK );
-            Set( HTTP::Content::Text::Plain );
-            Header.clear();
-            Cookie.clear();
-            Body.clear();
-            return *this;
-        }
+        Response& Set( HTTP::StatusCode ) &;
+        Response& Set( HTTP::ContentType ) &;
+        Response& SetHeader( const std::string&, std::string ) &;
+        Response& SetCookie( const std::string&, std::string ) &;
 
-        template<typename T>  //requires( ! std::same_as<std::remove_cvref_t<T>, Response> )
-        [[maybe_unused]] decltype( auto ) operator=( T&& NewContent )
-        {
-            if constexpr( DumpingString<T> ) { Body = std::forward<T>( NewContent ).dump(); }
-            else { Body = std::forward<T>( NewContent ); }
-            return *this;
-        }
+        Response& SetBody( std::string ) &;
+        Response& Append( StrView ) &;
+        Response& operator=( std::string ) &;
+        Response& operator+=( StrView ) &;
 
-        template<typename T>  //
-        [[maybe_unused]] decltype( auto ) Append( T&& NewContent )
-        {
-            if( Body.empty() ) return operator=( std::forward<T>( NewContent ) );
-            if constexpr( DumpingString<T> ) { Body.append( NewContent.dump() ); }
-            else { Body.append( std::forward<T>( NewContent ) ); }
-            return *this;
-        }
+        Response& SetBody( const Json& ) &;
+        Response& Append( const Json& ) &;
+        Response& operator=( const Json& ) &;
+        Response& operator+=( const Json& ) &;
 
-        template<typename T>                                            //
-        [[maybe_unused]] decltype( auto ) operator+=( T&& NewContent )  //
-        {
-            return Append( std::forward<T>( NewContent ) );
-        }
+        Response& Reset() &;
     };
 
     struct Request
@@ -824,60 +600,22 @@ namespace EasyFCGI
         struct Query
         {
             EasyFCGI::Json Json;
-            auto contains( StrView Key ) const { return Json.contains( Key ); }
-            auto CountRepeated( StrView Key ) const -> decltype( Json.size() )
-            {
-                if( ! Json.contains( Key ) ) return 0;
-                return Json[Key].size();
-            }
-            auto operator[]( StrView Key, std::size_t Index = 0 ) const -> std::string
-            {
-                if( ! Json.contains( Key ) ) return {};
-                const auto& Slot = Json[Key];
-                if( Slot.is_array() )
-                {
-                    if( Index < Slot.size() )
-                        return Slot[Index];
-                    else
-                        return {};
-                }
-                if( Slot.is_string() ) return Slot.template get<std::string>();
-                return Slot.dump();
-            }
+            auto contains( StrView ) const -> bool;
+            auto CountRepeated( StrView ) const -> decltype( Json.size() );
+            auto operator[]( StrView, std::size_t = 0 ) const -> std::string;
         };
 
         struct Cookie
         {
             FCGX_ParamArray EnvPtr;
-            auto operator[]( StrView Key ) const -> StrView
-            {
-                if( EnvPtr == nullptr ) return {};
-                using namespace ParseUtil;
-                auto CookieField = FCGX_GetParam( "HTTP_COOKIE", EnvPtr );
-                if( CookieField == nullptr ) return {};
-                for( auto Entry : CookieField | SplitBy( ';' ) )
-                    for( auto [K, V] : Entry | SplitOnceBy( '=' ) | VIEW::transform( TrimSpace ) | VIEW::pairwise )
-                        if( K == Key ) return V;
-                return {};
-            }
+            auto operator[]( StrView ) const -> StrView;
         };
 
         struct Header
         {
             FCGX_ParamArray EnvPtr;
-            auto operator[]( StrView Key ) const -> StrView
-            {
-                if( EnvPtr == nullptr ) return {};
-                auto FullHeaderKey = "HTTP_{}"_FMT( Key );
-                for( auto& C : FullHeaderKey )
-                {
-                    if( C == '-' ) C = '_';
-                    C = std::toupper( C );
-                }
-                auto Result = FCGX_GetParam( FullHeaderKey.c_str(), EnvPtr );
-                if( Result == nullptr ) return {};
-                return Result;
-            }
+            auto operator[]( StrView ) const -> StrView;
+            auto contains( StrView ) const -> bool;
         };
 
         struct Files
@@ -891,54 +629,14 @@ namespace EasyFCGI
                 StrView ContentType;
                 StrView ContentBody;
 
-                static auto NewFilePath( const FS::path& Path ) -> FS::path
-                {
-                    auto ResultPath = Path;
-                    auto FileExtension = Path.extension().string();
-                    auto OriginalStem = Path.stem().string();
-                    do {
-                        auto TimeStampSuffix = ".{:%Y.%m.%d.%H.%M.%S}"_FMT( std::chrono::file_clock::now() );
-                        auto NewFileName = "{}{}{}"_FMT( OriginalStem, StrView{ TimeStampSuffix }.substr( 0, 24 ), FileExtension );
-                        ResultPath.replace_filename( NewFileName );
-                    } while( FS::exists( ResultPath ) );
-                    return ResultPath;
-                }
-
-                auto SaveAs( const FS::path& Path, const OverWriteOptions OverWriteOption = OverWriteOptions::Abort ) const -> std::optional<FS::path>
-                {
-                    auto ParentDir = Path.parent_path();
-                    if( ! FS::exists( ParentDir ) ) FS::create_directories( ParentDir );
-
-                    auto ResultPath = Path;
-                    if( FS::exists( ResultPath ) )  //
-                        switch( OverWriteOption )
-                        {
-                            using enum OverWriteOptions;
-                            case Abort :         return std::nullopt;
-                            case OverWrite :     break;
-                            case RenameOldFile : FS::rename( Path, NewFilePath( Path ) ); break;
-                            case RenameNewFile : ResultPath = NewFilePath( Path ); break;
-                        }
-
-                    auto FileFD = fopen( ResultPath.c_str(), "wb" );
-                    std::fwrite( ContentBody.data(), sizeof( 1 [ContentBody.data()] ), ContentBody.size(), FileFD );
-                    std::fclose( FileFD );
-
-                    return ResultPath;
-                };
+                auto SaveAs( const FS::path&, const OverWriteOptions = Abort ) const -> std::optional<FS::path>;
             };
 
             std::map<StrView, std::vector<FileView>> Storage;
-            auto operator[]( StrView Key, std::size_t Index = 0 ) const -> FileView
-            {
-                if( ! Storage.contains( Key ) ) return {};
-                const auto& Slot = Storage.at( Key );
-                if( Index < Slot.size() ) return Slot[Index];
-                return {};
-            }
+            auto operator[]( StrView, std::size_t = 0 ) const -> FileView;
         };
 
-        struct Response Response;  // elaborated-type-specifier, silencing -Wchanges-meaning
+        struct Response Response;
         struct Files Files;
         std::string Payload;
         struct Query Query;
@@ -947,258 +645,40 @@ namespace EasyFCGI
         std::unique_ptr<FCGX_Request> FCGX_Request_Ptr;
         HTTP::RequestMethod Method;
         HTTP::ContentType ContentType;
-        ReusableFD* ReusableFD_Ptr;
 
-        // Read FCGI envirnoment variables set up by upstream server
-        auto GetParam( StrView ParamName ) const -> StrView
-        {
-            if( auto Result = FCGX_GetParam( std::data( ParamName ), FCGX_Request_Ptr->envp ) ) return Result;
-            return {};
-        }
+        auto GetParam( StrView ParamName ) const -> StrView;  // Read FCGI envirnoment variables set up by upstream server
+        auto AllHeaderEntries() const -> std::vector<StrView>;
+        auto Parse() -> int;
 
-        auto AllHeaderEntries() const
-        {
-            auto Result = std::vector<std::string_view>{};
-            Result.reserve( 100 );
-            for( auto EnvP = FCGX_Request_Ptr->envp; EnvP != nullptr && *EnvP != nullptr; ++EnvP ) { Result.push_back( *EnvP ); }
-            return Result;
-        }
-
-        auto Parse() -> int
-        {
-            // if not using nginx, disable persistent connection
-            if( GetParam( "SERVER_SOFTWARE" ).contains( "Apache" ) ) FCGX_Request_Ptr->keepConnection = false;
-            using namespace ParseUtil;
-            Query.Json = {};  // .clear() cannot reset residual discarded state
-            Files.Storage.clear();
-            Payload.clear();
-
-            Header.EnvPtr = FCGX_Request_Ptr->envp;
-            Cookie.EnvPtr = FCGX_Request_Ptr->envp;
-
-            Method = GetParam( "REQUEST_METHOD" );
-            ContentType = GetParam( "CONTENT_TYPE" );
-
-            Payload.resize_and_overwrite( ( GetParam( "CONTENT_LENGTH" ) | ConvertTo<int> | FallBack( 0 ) ) + 1,  //
-                                          [Stream = FCGX_Request_Ptr->in]( char* Buffer, std::size_t N ) {        //
-                                              return FCGX_GetStr( Buffer, N, Stream );
-                                          } );
-
-            auto QueryAppend = [&Result = Query.Json]( std::string_view Key, auto&& Value ) {
-                if( ! Key.empty() ) Result[Key].push_back( std::forward<decltype( Value )>( Value ) );
-            };
-
-            {
-                // read query string, then request body
-                // duplicated key-value will be overwritten
-                for( auto Segment : GetParam( "QUERY_STRING" ) | SplitBy( '&' ) )
-                    for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
-                        QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
-
-                switch( ContentType )
-                {
-                    default : break;
-                    case HTTP::Content::Application::FormURLEncoded :
-                    {
-                        for( auto Segment : Payload | SplitBy( '&' ) )
-                            for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
-                                QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
-                        break;
-                    }
-                    case HTTP::Content::MultiPart::FormData :
-                    {
-                        auto _ = ScopedTimer( "MultipartParseTime" );
-                        auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
-                        auto ExtendedBoundaryPattern = "\r\n--{}\r\nContent-Disposition: form-data; name="_FMT( BoundaryPattern );
-
-                        // remove trailing boundary to avoid empty ending after split
-                        auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
-                        if( PayloadView.empty() ) break;
-
-                        auto NameFieldPrefix = StrView{ "name=" };
-                        if( PayloadView.starts_with( ExtendedBoundaryPattern.substr( 2 ) ) )
-                        {  // enable ExtendedBoundaryPattern
-                            BoundaryPattern = ExtendedBoundaryPattern;
-                            NameFieldPrefix = NameFieldPrefix | CollapseToEnd;
-                        }
-                        else
-                        {  // fallback to standard
-                            BoundaryPattern = ExtendedBoundaryPattern | Before( "Content-Disposition" );
-                        }
-
-                        PayloadView = PayloadView | TrimLeading( BoundaryPattern.substr( 2 ) );
-
-                        // at this point, PayloadView does not contain BoundaryPattern on both ends.
-
-                        for( auto&& Body : PayloadView | SplitBy( BoundaryPattern ) )
-                        {
-                            auto [Header, Content] = Body | SplitOnceBy( "\r\n\r\n" );
-
-                            auto Name = Header | After( NameFieldPrefix ) | Between( '"' );
-                            if( Name.empty() ) break;  // should never happen?
-                            auto FileName = Header | After( "filename=" ) | Between( '"' );
-                            auto ContentType = Header | After( "\r\n" ) | After( "Content-Type:" ) | TrimSpace;
-
-                            if( ContentType.empty() ) { QueryAppend( Name, Content ); }
-                            else
-                            {
-                                QueryAppend( Name, FileName );
-                                if( ! FileName.empty() || ! Content.empty() )  //
-                                    Files.Storage[Name].emplace_back( FileName, ContentType, Content );
-                            }
-                        }
-                        break;
-                    }
-                    case HTTP::Content::Application::Json :
-                    {
-                        Query.Json = Json::parse( Payload, nullptr, false );  // disable exception
-                        if( Query.Json.is_discarded() )
-                        {  // parse error
-                            // early response with error message
-                            // caller does not see this iteration
-                            // give caller the next request
-                            FCGX_PutS(
-                                "Status: 400\r\n"
-                                "Content-Type: text/html; charset=UTF-8\r\n"
-                                "\r\n"
-                                "Invalid Json.",
-                                FCGX_Request_Ptr->out );
-
-                            std::println( "Responding 400 Bad Request to Request with invalid Json.\nReady to accept new request..." );
-
-                            // re-using FCGX_Request struct, parse again
-                            if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
-                            return -1;
-                        }
-                        break;
-                    }
-                }
-            }
-            return 0;
-        }
-
-        Request() = default;
+        Request();
+        Request( Request&& Other );
         Request( const Request& ) = delete;
-        Request( Request&& Other ) = default;
 
-        Request( SocketFileDescriptor SocketFD, ConnectionFileDescriptor ConnectionFD, ReusableFD* ReusableFD_Ptr )  //
-            : FCGX_Request_Ptr{ std::make_unique_for_overwrite<FCGX_Request>().release() },
-              ReusableFD_Ptr{ ReusableFD_Ptr }
-        {
-            auto Request_Ptr = FCGX_Request_Ptr.get();
-            (void)FCGX_InitRequest( Request_Ptr, SocketFD, FCGI_FAIL_ACCEPT_ON_INTR );
-            Request_Ptr->ipcFd = ConnectionFD;  // specify ipcFD, enable persistent connection
+        Request( SocketFileDescriptor );
 
-            if( FCGX_Accept_r( Request_Ptr ) == 0 )
-            {
-                // FCGX_Request_Ptr ready, setup the rest of request object(parse request)
-                if( Parse() == 0 ) { return; }
-            }
+        Request& operator=( Request&& Other ) &;
 
-            // fail to obtain valid request, reset residual request data & allocation
-            // custom deleter of FCGX_Request_Ptr will do the cleanup
-            FCGX_InitRequest( Request_Ptr, {}, {} );
-            FCGX_Request_Ptr.reset();
+        auto empty() const -> bool;
 
-            if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
-        }
+        auto operator[]( StrView, std::size_t = 0 ) const -> decltype( Query[{}, {}] );
 
-        static auto AcceptFrom( auto&&... args ) { return Request{ std::forward<decltype( args )>( args )... }; }
+        auto Send( StrView ) const -> void;
+        auto SendLine( StrView = {} ) const -> void;
 
-        Request& operator=( Request&& Other ) = default;
+        // template<typename... Args>
+        // requires( sizeof...( Args ) > 0 )
+        // auto Send( const std::format_string<Args...>&, Args&&... ) const;
 
-        auto empty() const { return FCGX_Request_Ptr == nullptr; }
+        // template<typename... Args>
+        // requires( sizeof...( Args ) > 0 )
+        // auto SendLine( const std::format_string<Args...>&, Args&&... ) const;
 
-        auto operator[]( StrView Key, std::size_t Index = 0 ) const { return Query[Key, Index]; }
-
-        auto OutputIterator() const
-        {
-            struct OutIt
-            {
-                using difference_type = std::ptrdiff_t;
-                FCGX_Stream* Out;
-                auto operator*() const { return *this; }
-                auto& operator++() & { return *this; }
-                auto operator++( int ) const { return *this; }
-                auto operator=( char C ) const { return FCGX_PutChar( C, Out ); }
-            };
-            return OutIt{ FCGX_Request_Ptr->out };
-        }
-
-        auto Send( StrView Content ) const
-        {
-            if( Content.empty() || FCGX_Request_Ptr == nullptr ) return;
-            FCGX_PutStr( Content.data(), Content.length(), FCGX_Request_Ptr->out );
-        }
-
-        auto SendLine( StrView Content = {} ) const
-        {
-            Send( Content );
-            Send( "\r\n" );
-        }
-
-        template<typename... Args>
-        requires( sizeof...( Args ) > 0 )                                          //
-        auto Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
-        {
-            if( FCGX_Request_Ptr == nullptr ) return;
-            std::format_to( OutputIterator(), fmt, std::forward<Args>( args )... );
-        }
-
-        template<typename... Args>
-        requires( sizeof...( Args ) > 0 )                                              //
-        auto SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
-        {
-            Send( fmt, std::forward<Args>( args )... );
-            SendLine();
-        }
-
-        auto FlushHeader()
-        {
-            using enum HTTP::StatusCode;
-            switch( Response.StatusCode )
-            {
-                case InternalUse_HeaderAlreadySent : return InternalUse_HeaderAlreadySent;
-                case HTTP::StatusCode::NoContent :   SendLine( "Status: 204" ); break;
-                default :
-                    SendLine( "Status: {}"_FMT( std::to_underlying( Response.StatusCode ) ) );
-                    SendLine( "Content-Type: {}; charset=UTF-8"_FMT( Response.ContentType.EnumLiteral() ) );
-                    break;
-            }
-
-            for( auto&& [K, V] : Response.Cookie ) SendLine( "Set-Cookie: {}={}"_FMT( K, V ) );
-            for( auto&& [K, V] : Response.Header ) SendLine( "{}: {}"_FMT( K, V ) );
-            SendLine();
-            FCGX_FFlush( FCGX_Request_Ptr->out );
-
-            return std::exchange( Response.StatusCode, InternalUse_HeaderAlreadySent );
-        }
-
-        auto FlushResponse()
-        {
-            Send( Response.Body );
-            Response.Body.clear();
-            return FCGX_FFlush( FCGX_Request_Ptr->out );
-        }
-
-        auto EarlyFinish() { std::exchange( *this, {} ); }
-
-        auto SSE_Start()
-        {
-            if( Response.StatusCode == HTTP::StatusCode::InternalUse_HeaderAlreadySent )
-            {
-                std::println( "[ Fail ] Attempting SSE_Start after header flushed. no-op." );
-                return;
-            }
-            Response
-                .Set( HTTP::StatusCode::OK )  //
-                .Set( HTTP::Content::Text::EventStream )
-                .SetHeader( "Cache-Control", "no-cache" );
-            FlushHeader();
-            FlushResponse();
-        }
-
-        auto SSE_Send( auto&&... Content ) const
+        auto FlushHeader() -> HTTP::StatusCode;
+        auto FlushResponse() -> decltype( FCGX_FFlush( {} ) );
+        auto EarlyFinish() -> void;
+        auto SSE_Start() -> void;
+        auto SSE_Error() const -> decltype( FCGX_GetError( {} ) );
+        auto SSE_Send( std::convertible_to<StrView> auto&&... Content ) const
         {
             ( Send( Content ), ... );
             SendLine();
@@ -1206,17 +686,558 @@ namespace EasyFCGI
             return FCGX_FFlush( FCGX_Request_Ptr->out );
         };
 
-        auto SSE_Error() const { return FCGX_GetError( FCGX_Request_Ptr->out ); }
+        auto Dump() const -> std::string;
 
-        virtual ~Request()
-        {
-            if( ! FCGX_Request_Ptr ) return;
-            // std::println( "ID: [ {:2},{:2} ] Request Complete...", FCGX_Request_Ptr->ipcFd, FCGX_Request_Ptr->requestId );
-            if( FlushHeader() != HTTP::StatusCode::NoContent ) FlushResponse();
-            FCGX_Finish_r( FCGX_Request_Ptr.get() );
-            if( ReusableFD_Ptr && FCGX_Request_Ptr->ipcFd != -1 ) ReusableFD_Ptr->Store( FCGX_Request_Ptr->ipcFd );
-        }
+        // virtual
+        ~Request();
     };
+
+    // auto UnixSocketName( SocketFileDescriptor FD ) -> FS::path;
+    struct Server
+    {
+        struct RequestQueue
+        {
+            SocketFileDescriptor ListenSocket;
+            RequestQueue() = delete;
+            RequestQueue( const RequestQueue& ) = delete;
+            RequestQueue( SocketFileDescriptor );
+            auto WaitForListenSocket( int Timeout = -1 ) const -> bool;
+            auto ListenSocketActivated() const -> bool;
+            auto NextRequest() const -> Request;
+
+            struct Sentinel
+            {};
+
+            struct Iterator
+            {
+                const RequestQueue& AttachedQueue;
+                auto operator++() & -> Iterator&;
+                auto operator*() const -> Request;
+                auto operator==( Sentinel ) const -> bool;
+            };
+
+            auto begin() const -> Iterator;
+            auto end() const -> Sentinel;
+        } RequestQueue;
+
+        Server( SocketFileDescriptor );
+        Server();
+        Server( const FS::path& );
+    };
+}  // namespace EasyFCGI
+
+// enable formatter for HTTP constant objects
+template<typename T>
+requires requires { typename T::FormatAs; }
+struct std::formatter<T> : std::formatter<typename T::FormatAs>
+{
+    auto format( const T& Value, std::format_context& ctx ) const  //
+    {
+        return std::formatter<typename T::FormatAs>::format( Value, ctx );
+    }
+};
+
+#ifndef _EASY_FCGI_SEPARATE_COMPILATION
+
+using namespace std::chrono_literals;
+using namespace std::string_literals;
+using namespace std::string_view_literals;
+
+namespace EasyFCGI
+{
+    // using namespace std::string_view_literals;
+    // namespace FS = std::filesystem;
+    // namespace RNG = std::ranges;
+    // namespace VIEW = std::views;
+    // using Json = nlohmann::json;
+    // using StrView = std::string_view;
+    using ParseUtil::operator""_FMT;
+
+    inline namespace Concept
+    {
+        template<typename T>
+        concept DumpingString = requires( T&& t ) {
+            { t.dump() } -> std::same_as<std::string>;
+        };
+    }
+    namespace Config
+    {
+        int DefaultBackLogNumber = int{ 128 };  // evetually be capped by /proc/sys/net/core/somaxconncat,ie.4096
+        StrView SocketDirectoryPrefix = "/dev/shm/"sv;
+        StrView SocketExtensionSuffix = ".sock"sv;
+
+        std::vector<char*> CommandLine()
+        {
+            static auto CommandLineBuffer = [] -> std::vector<char> {
+                constexpr auto CommandLineBufferMax = 4096uz;
+                auto ReadBuffer = std::array<char, CommandLineBufferMax>{ '\0' };
+                auto fin = std::fopen( "/proc/self/cmdline", "rb" );
+                auto LoadedSize = std::fread( ReadBuffer.data(), sizeof( ReadBuffer[0] ), ReadBuffer.size(), fin );
+                std::fclose( fin );
+                if( LoadedSize == 0 ) return {};
+                return std::vector( ReadBuffer.begin(), std::next( ReadBuffer.begin(), LoadedSize ) );
+            }();
+            static auto CommandLine = CommandLineBuffer                             //
+                                      | VIEW::take( CommandLineBuffer.size() - 1 )  // trim trailing '\0'
+                                      | VIEW::split( '\0' )                         //
+                                      | VIEW::transform( RNG::data )                // reduce back to char*
+                                      | RNG::to<std::vector>();
+            return CommandLine;
+        }
+        FS::path DefaultSocketPath()
+        {
+            return FS::path( Config::SocketDirectoryPrefix ) /  //
+                   FS::path( CommandLine()[0] )
+                       .filename()  //
+                       .replace_extension( Config::SocketExtensionSuffix );
+        }
+        std::optional<FS::path> LaunchOptionSocketPath()
+        {
+            for( auto&& [Option, OptionArg] : CommandLine() | VIEW::pairwise )
+                if( Option == "-s"sv )  //
+                    return OptionArg;
+            return {};
+        }
+
+    }  // namespace Config
+
+    auto TerminationSource = std::stop_source{};
+    auto TerminationToken = TerminationSource.get_token();
+
+    Response& Response::Set( HTTP::StatusCode NewValue ) & { return StatusCode = NewValue, *this; }
+    Response& Response::Set( HTTP::ContentType NewValue ) & { return ContentType = NewValue, *this; }
+    Response& Response::SetHeader( const std::string& Key, std::string Value ) &
+    {
+        Header[Key] = std::move( Value );
+        return *this;
+    }
+    Response& Response::SetCookie( const std::string& Key, std::string Value ) &
+    {
+        Cookie[Key] = std::move( Value );
+        return *this;
+    }
+
+    Response& Response::SetBody( std::string Value ) &
+    {
+        Body = std::move( Value );
+        return *this;
+    }
+    Response& Response::Append( std::string_view Value ) &
+    {
+        Body += Value;
+        return *this;
+    }
+    Response& Response::operator=( std::string Value ) & { return SetBody( std::move( Value ) ); }
+    Response& Response::operator+=( std::string_view Value ) & { return Append( Value ); }
+
+    Response& Response::SetBody( const Json& Value ) & { return SetBody( Value.dump() ); }
+    Response& Response::Append( const Json& Value ) & { return Append( StrView{ Value.dump() } ); }
+    Response& Response::operator=( const Json& Value ) & { return SetBody( Value ); }
+    Response& Response::operator+=( const Json& Value ) & { return Append( Value ); }
+
+    Response& Response::Reset() &
+    {
+        Set( HTTP::StatusCode::OK );
+        Set( HTTP::Content::Text::Plain );
+        Header.clear();
+        Cookie.clear();
+        Body.clear();
+        return *this;
+    }
+
+    auto Request::Query::contains( StrView Key ) const -> bool { return Json.contains( Key ); }
+    auto Request::Query::CountRepeated( StrView Key ) const -> decltype( Json.size() )
+    {
+        if( ! Json.contains( Key ) ) return 0;
+        return Json[Key].size();
+    }
+    auto Request::Query::operator[]( StrView Key, std::size_t Index ) const -> std::string
+    {
+        if( ! Json.contains( Key ) ) return {};
+        const auto& Slot = Json[Key];
+        if( Slot.is_array() )
+        {
+            if( Index < Slot.size() )
+                return Slot[Index];
+            else
+                return {};
+        }
+        if( Slot.is_string() ) return Slot.template get<std::string>();
+        return Slot.dump();
+    }
+
+    auto Request::Cookie::operator[]( StrView Key ) const -> StrView
+    {
+        if( EnvPtr == nullptr ) return {};
+        using namespace ParseUtil;
+        auto CookieField = FCGX_GetParam( "HTTP_COOKIE", EnvPtr );
+        if( CookieField == nullptr ) return {};
+        for( auto Entry : CookieField | SplitBy( ';' ) )
+            for( auto [K, V] : Entry | SplitOnceBy( '=' ) | VIEW::transform( TrimSpace ) | VIEW::pairwise )
+                if( K == Key ) return V;
+        return {};
+    }
+
+    static auto FullHeaderKey( StrView Key )
+    {
+        auto FullKey = "HTTP_{}"_FMT( Key );
+        for( auto& C : FullKey )
+        {
+            if( C == '-' ) C = '_';
+            C = std::toupper( C );
+        }
+        return FullKey;
+    }
+
+    auto Request::Header::operator[]( StrView Key ) const -> StrView
+    {
+        if( auto Result = FCGX_GetParam( FullHeaderKey( Key ).c_str(), EnvPtr ) )  //
+            return Result;
+        return {};
+    }
+
+    auto Request::Header::contains( StrView Key ) const -> bool  //
+    {
+        return FCGX_GetParam( FullHeaderKey( Key ).c_str(), EnvPtr ) != nullptr;
+    }
+
+    static auto NewFilePath( const FS::path& Path ) -> FS::path
+    {
+        auto ResultPath = Path;
+        auto FileExtension = Path.extension().string();
+        auto OriginalStem = Path.stem().string();
+        do {
+            auto TimeStampSuffix = ".{:%Y.%m.%d.%H.%M.%S}"_FMT( std::chrono::file_clock::now() );
+            auto NewFileName = "{}{}{}"_FMT( OriginalStem, StrView{ TimeStampSuffix }.substr( 0, 24 ), FileExtension );
+            ResultPath.replace_filename( NewFileName );
+        } while( FS::exists( ResultPath ) );
+        return ResultPath;
+    }
+
+    auto Request::Files::FileView::SaveAs( const FS::path& Path, const OverWriteOptions OverWriteOption ) const -> std::optional<FS::path>
+    {
+        auto ParentDir = Path.parent_path();
+        if( ! FS::exists( ParentDir ) ) FS::create_directories( ParentDir );
+
+        auto ResultPath = Path;
+        if( FS::exists( ResultPath ) )  //
+            switch( OverWriteOption )
+            {
+                case Abort :         return std::nullopt;
+                case OverWrite :     break;
+                case RenameOldFile : FS::rename( Path, NewFilePath( Path ) ); break;
+                case RenameNewFile : ResultPath = NewFilePath( Path ); break;
+            }
+
+        auto FileFD = fopen( ResultPath.c_str(), "wb" );
+        std::fwrite( ContentBody.data(), sizeof( 1 [ContentBody.data()] ), ContentBody.size(), FileFD );
+        std::fclose( FileFD );
+
+        return ResultPath;
+    };
+
+    auto Request::Files::operator[]( StrView Key, std::size_t Index ) const -> FileView
+    {
+        if( ! Storage.contains( Key ) ) return {};
+        const auto& Slot = Storage.at( Key );
+        if( Index < Slot.size() ) return Slot[Index];
+        return {};
+    }
+
+    auto Request::GetParam( StrView ParamName ) const -> StrView
+    {
+        if( auto Result = FCGX_GetParam( std::data( ParamName ), FCGX_Request_Ptr->envp ) ) return Result;
+        return {};
+    }
+
+    auto Request::AllHeaderEntries() const -> std::vector<StrView>
+    {
+        auto Result = std::vector<StrView>{};
+        Result.reserve( 100 );
+        for( auto EnvP = FCGX_Request_Ptr->envp; EnvP != nullptr && *EnvP != nullptr; ++EnvP )
+        {
+            Result.push_back( *EnvP );
+        }
+        return Result;
+    }
+
+    auto Request::Parse() -> int
+    {
+        using namespace ParseUtil;
+        Query.Json = {};  // .clear() cannot reset residual discarded state
+        Files.Storage.clear();
+        Payload.clear();
+
+        Header.EnvPtr = FCGX_Request_Ptr->envp;
+        Cookie.EnvPtr = FCGX_Request_Ptr->envp;
+
+        Method = GetParam( "REQUEST_METHOD" );
+        ContentType = GetParam( "CONTENT_TYPE" );
+
+        Payload.resize_and_overwrite( ( GetParam( "CONTENT_LENGTH" ) | ConvertTo<int> | FallBack( 0 ) ) + 1,  //
+                                      [Stream = FCGX_Request_Ptr->in]( char* Buffer, std::size_t N ) {        //
+                                          return FCGX_GetStr( Buffer, N, Stream );
+                                      } );
+
+        auto QueryAppend = [&Result = Query.Json]( std::string_view Key, auto&& Value ) {
+            if( ! Key.empty() ) Result[Key].push_back( std::forward<decltype( Value )>( Value ) );
+        };
+
+        {
+            // read query string, then request body
+            // duplicated key-value will be overwritten
+            for( auto Segment : GetParam( "QUERY_STRING" ) | SplitBy( '&' ) )
+                for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
+                    QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
+
+            switch( ContentType )
+            {
+                default : break;
+                case HTTP::Content::Application::FormURLEncoded :
+                {
+                    for( auto Segment : Payload | SplitBy( '&' ) )
+                        for( auto [EncodedKey, EncodedValue] : Segment | SplitOnceBy( '=' ) | VIEW::pairwise )
+                            QueryAppend( DecodeURLFragment( EncodedKey ), DecodeURLFragment( EncodedValue ) );
+                    break;
+                }
+                case HTTP::Content::MultiPart::FormData :
+                {
+                    // auto _ = ScopedTimer( "MultipartParseTime" );
+                    auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
+                    auto ExtendedBoundaryPattern = "\r\n--{}\r\nContent-Disposition: form-data; name="_FMT( BoundaryPattern );
+
+                    // remove trailing boundary to avoid empty ending after split
+                    auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
+                    if( PayloadView.empty() ) break;
+
+                    auto NameFieldPrefix = StrView{ "name=" };
+                    if( PayloadView.starts_with( ExtendedBoundaryPattern.substr( 2 ) ) )
+                    {  // enable ExtendedBoundaryPattern
+                        BoundaryPattern = ExtendedBoundaryPattern;
+                        NameFieldPrefix = NameFieldPrefix | CollapseToEnd;
+                    }
+                    else
+                    {  // fallback to standard
+                        BoundaryPattern = ExtendedBoundaryPattern | Before( "Content-Disposition" );
+                    }
+
+                    PayloadView = PayloadView | TrimLeading( BoundaryPattern.substr( 2 ) );
+
+                    // at this point, PayloadView does not contain BoundaryPattern on both ends.
+
+                    for( auto&& Body : PayloadView | SplitBy( BoundaryPattern ) )
+                    {
+                        auto [Header, Content] = Body | SplitOnceBy( "\r\n\r\n" );
+
+                        auto Name = Header | After( NameFieldPrefix ) | Between( '"' );
+                        if( Name.empty() ) break;  // should never happen?
+                        auto FileName = Header | After( "filename=" ) | Between( '"' );
+                        auto ContentType = Header | After( "\r\n" ) | After( "Content-Type:" ) | TrimSpace;
+
+                        if( ContentType.empty() )
+                        {
+                            QueryAppend( Name, Content );
+                        }
+                        else
+                        {
+                            QueryAppend( Name, FileName );
+                            if( ! FileName.empty() || ! Content.empty() )  //
+                                Files.Storage[Name].emplace_back( FileName, ContentType, Content );
+                        }
+                    }
+                    break;
+                }
+                case HTTP::Content::Application::Json :
+                {
+                    Query.Json = Json::parse( Payload, nullptr, false );  // disable exception
+                    if( Query.Json.is_discarded() )
+                    {  // parse error
+                        // early response with error message
+                        // caller does not see this iteration
+                        // give caller the next request
+                        FCGX_PutS( "Status: 400\r\n"
+                                   "Content-Type: text/html; charset=UTF-8\r\n"
+                                   "\r\n"
+                                   "Invalid Json.",
+                                   FCGX_Request_Ptr->out );
+
+                        std::println( "Responding 400 Bad Request to Request with invalid Json.\nReady to accept new request..." );
+
+                        // re-using FCGX_Request struct, parse again
+                        if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
+                        return -1;
+                    }
+                    break;
+                }
+            }
+        }
+        return 0;
+    }
+
+    Request::Request() = default;
+    Request::Request( Request&& Other ) = default;
+    // Request::Request( const Request& ) = delete;
+
+    Request::Request( SocketFileDescriptor SocketFD )  //
+        : FCGX_Request_Ptr{ std::make_unique_for_overwrite<FCGX_Request>().release() }
+    {
+        auto Request_Ptr = FCGX_Request_Ptr.get();
+        (void)FCGX_InitRequest( Request_Ptr, SocketFD, FCGI_FAIL_ACCEPT_ON_INTR );
+        Request_Ptr->keepConnection = 0;  // disable fastcgi_keep_conn
+        if( FCGX_Accept_r( Request_Ptr ) == 0 )
+        {
+            // FCGX_Request_Ptr ready, setup the rest of request object(parse request)
+            if( Parse() == 0 ) return;
+        }
+
+        // fail to obtain valid request, reset residual request data & allocation
+        // custom deleter of FCGX_Request_Ptr will do the cleanup
+        FCGX_InitRequest( Request_Ptr, {}, {} );
+        FCGX_Request_Ptr.reset();
+
+        if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
+    }
+
+    Request& Request::operator=( Request&& Other ) & = default;
+
+    auto Request::empty() const -> bool { return FCGX_Request_Ptr == nullptr; }
+
+    auto Request::operator[]( StrView Key, std::size_t Index ) const -> decltype( Query[{}, {}] ) { return Query[Key, Index]; }
+
+    static auto OutputIteratorFor( const std::unique_ptr<FCGX_Request>& FCGX_Request_Ptr )
+    {
+        struct OutIt
+        {
+            using difference_type = std::ptrdiff_t;
+            FCGX_Stream* Out;
+            auto operator*() const { return *this; }
+            auto& operator++() & { return *this; }
+            auto operator++( int ) const { return *this; }
+            auto operator=( char C ) const { return FCGX_PutChar( C, Out ); }
+        };
+        return OutIt{ FCGX_Request_Ptr->out };
+    }
+
+    auto Request::Send( StrView Content ) const -> void
+    {
+        if( Content.empty() || FCGX_Request_Ptr == nullptr ) return;
+        FCGX_PutStr( Content.data(), Content.length(), FCGX_Request_Ptr->out );
+    }
+
+    auto Request::SendLine( StrView Content ) const -> void
+    {
+        Send( Content );
+        Send( "\r\n" );
+    }
+
+    // template<typename... Args>
+    // requires( sizeof...( Args ) > 0 )
+    // auto Request::Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
+    // {
+    //     if( FCGX_Request_Ptr == nullptr ) return;
+    //     std::format_to( OutputIteratorFor( FCGX_Request_Ptr ), fmt, std::forward<Args>( args )... );
+    // }
+
+    // template<typename... Args>
+    // requires( sizeof...( Args ) > 0 )
+    // auto Request::SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
+    // {
+    //     Send( fmt, std::forward<Args>( args )... );
+    //     SendLine();
+    // }
+
+    auto Request::FlushHeader() -> HTTP::StatusCode
+    {
+        using enum HTTP::StatusCode;
+        switch( Response.StatusCode )
+        {
+            case InternalUse_HeaderAlreadySent : return InternalUse_HeaderAlreadySent;
+            case HTTP::StatusCode::NoContent :   SendLine( "Status: 204" ); break;
+            default :
+                SendLine( "Status: {}"_FMT( std::to_underlying( Response.StatusCode ) ) );
+                SendLine( "Content-Type: {}; charset=UTF-8"_FMT( Response.ContentType.EnumLiteral() ) );
+                break;
+        }
+
+        for( auto&& [K, V] : Response.Cookie ) SendLine( "Set-Cookie: {}={}"_FMT( K, V ) );
+        for( auto&& [K, V] : Response.Header ) SendLine( "{}: {}"_FMT( K, V ) );
+        SendLine();
+        FCGX_FFlush( FCGX_Request_Ptr->out );
+
+        return std::exchange( Response.StatusCode, InternalUse_HeaderAlreadySent );
+    }
+
+    auto Request::FlushResponse() -> decltype( FCGX_FFlush( {} ) )
+    {
+        Send( Response.Body );
+        Response.Body.clear();
+        return FCGX_FFlush( FCGX_Request_Ptr->out );
+    }
+
+    auto Request::EarlyFinish() -> void { std::exchange( *this, {} ); }
+
+    auto Request::SSE_Start() -> void
+    {
+        if( Response.StatusCode == HTTP::StatusCode::InternalUse_HeaderAlreadySent )
+        {
+            std::println( "[ Fail ] Attempting SSE_Start after header flushed. no-op." );
+            return;
+        }
+        Response
+            .Set( HTTP::StatusCode::OK )  //
+            .Set( HTTP::Content::Text::EventStream )
+            .SetHeader( "Cache-Control", "no-cache" );
+        FlushHeader();
+        FlushResponse();
+    }
+
+    auto Request::SSE_Error() const -> decltype( FCGX_GetError( {} ) ) { return FCGX_GetError( FCGX_Request_Ptr->out ); }
+
+    auto Request::Dump() const -> std::string
+    {
+        auto Result = std::string{};
+        Result += std::format( "Method: [{}]\n", Method );
+        Result += std::format( "Content Type: [{}]\n", ContentType );
+        Result += "Header: [\n";
+        for( auto E : AllHeaderEntries() ) Result += std::format( "  {}\n", E );
+        Result += "]\n";
+
+        Result += std::format( "Query String: [{}]\n", GetParam( "QUERY_STRING" ) );
+        if( Payload.empty() )
+            Result += "Payload: [{}]\n";
+        else
+            Result += std::format( "Payload: [\n{}]\n", Payload );
+
+        Result += std::format( "{:-^50}\n", "" );
+
+        if( Query.Json.empty() )
+            Result += "Query Json: []\n";
+        else
+            Result += std::format( "Query Json: [\n{}\n]\n", Query.Json.dump( 2 ) );
+
+        if( Files.Storage.empty() )
+            Result += "Files: []\n";
+        else
+            Result += std::format( "Files: [{}]\n",                                                     //
+                                   RNG::fold_left( Files.Storage, "\n", []( auto&& Acc, auto&& New ) {  //
+                                       auto&& [K, V] = New;
+                                       auto List = std::string{};
+                                       for( auto&& F : V ) List = std::format( "{}{}, ", List, F.FileName );
+                                       return std::format( "{}{}:{}\n", Acc, K, List );
+                                   } ) );
+
+        return std::format( "{0:-^50}\n\n{1}\n{0:-^50}", "Request Detail", Result );
+    }
+
+    Request::~Request()
+    {
+        if( FCGX_Request_Ptr == nullptr ) return;
+        // std::println( "ID: [ {:2},{:2} ] Request Complete...", FCGX_Request_Ptr->ipcFd, FCGX_Request_Ptr->requestId );
+        if( FlushHeader() != HTTP::StatusCode::NoContent ) FlushResponse();
+        FCGX_Request_Ptr->keepConnection = 0;  // just in case
+        FCGX_Finish_r( FCGX_Request_Ptr.get() );
+        FCGX_Request_Ptr.reset();
+    }
 
     static auto UnixSocketName( SocketFileDescriptor FD ) -> FS::path
     {
@@ -1235,101 +1256,111 @@ namespace EasyFCGI
         return {};
     }
 
-    struct Server
+    extern "C" void OS_LibShutdown();  // for omitting #include <fcgios.h>
+    auto ServerInitialization() -> void
     {
-        inline static auto ServerInitializationExec = ( ServerInitialization(), 0 );
+        static auto ServerInitializationComplete = false;
+        if( std::exchange( ServerInitializationComplete, true ) ) return;
 
-        struct RequestQueue
+        if( auto ErrorCode = FCGX_Init(); ErrorCode == 0 )
         {
-            RequestQueue() = delete;
-            RequestQueue( const RequestQueue& ) = delete;
-            RequestQueue( SocketFileDescriptor SourceSocketFD ) : ListenSocket{ SourceSocketFD } {};
+            std::println( "[ OK ]  ServerInitialization : FCGX_Init" );
+            std::atexit( OS_LibShutdown );
 
-            SocketFileDescriptor ListenSocket;
-
-            struct ReusableFD ReusableFD{};
-
-            auto WaitForListenSocket( int Timeout = -1 ) const { return PollFor( ListenSocket, POLLIN, Timeout ); }
-            auto ListenSocketActivated() const { return WaitForListenSocket( 0 ); }
-
-            auto NextRequest() { return Request::AcceptFrom( ListenSocket, ReusableFD.Load().value_or( -1 ), &ReusableFD ); }
-
-            struct Sentinel
-            {};
-            struct Iterator
-            {
-                RequestQueue& AttachedQueue;
-                auto& operator++() &
-                {
-                    //no-op
-                    return *this;
-                }
-                auto operator*() const { return AttachedQueue.ListenSocketActivated() ? AttachedQueue.NextRequest() : Request{}; }
-                bool operator==( Sentinel ) const
-                {
-                    auto _ = ScopedTimer( "WaitForListenSocket" );
-                    return ! AttachedQueue.WaitForListenSocket();
-                }
+            struct sigaction SignalAction;
+            sigemptyset( &SignalAction.sa_mask );
+            SignalAction.sa_flags = 0;  // disable SA_RESTART
+            SignalAction.sa_handler = []( int Signal ) {
+                TerminationSource.request_stop();
+                FCGX_ShutdownPending();
             };
+            ::sigaction( SIGINT, &SignalAction, nullptr );
+            ::sigaction( SIGTERM, &SignalAction, nullptr );
 
-            auto begin() { return Iterator{ *this }; }
-            auto end() const { return Sentinel{}; }
-        } RequestQueue;
-
-        Server( SocketFileDescriptor ListenSocket ) : RequestQueue{ ListenSocket }
-        {
-            std::println( "Server file descriptor : {}", static_cast<int>( ListenSocket ) );
-            std::println( "Unix Socket Path : {}", UnixSocketName( ListenSocket ).c_str() );
-            std::println( "Ready to accept requests..." );
+            // sigemptyset( &SignalAction.sa_mask );
+            // SignalAction.sa_handler = SIG_IGN;
+            // ::sigaction( SIGPIPE, &SignalAction, nullptr );
         }
-
-        // Server() : Server{ SocketFileDescriptor{} }
-        Server() : Server( Config::OptionSocketPath.value_or( Config::DefaultSocketPath ) ) {}
-        Server( const FS::path& SocketPath )
-            : Server( SocketPath.empty()  //
-                          ? SocketFileDescriptor{}
-                          : FCGX_OpenSocket( SocketPath.c_str(), Config::DefaultBackLogNumber ) )
+        else
         {
-            auto FD = RequestQueue.ListenSocket;
-            if( FD == -1 )
-            {
-                std::println( "Failed to open socket." );
-                std::exit( -1 );
-            }
-            if( FD > 0 ) { FS::permissions( SocketPath, FS::perms::all ); }
+            std::println( "[ Fatal, Error = {} ]  ServerInitialization : FCGX_Init NOT Successful", ErrorCode );
+            std::exit( ErrorCode );
         }
     };
 
-    namespace DebugInfo
+    Server::RequestQueue::RequestQueue( SocketFileDescriptor SourceSocketFD ) : ListenSocket{ SourceSocketFD } {};
+
+    // static auto PollFor( int FD, unsigned int Flags, int Timeout = -1 )
+    // {
+    //     auto PollFD = pollfd{ .fd = FD, .events = static_cast<short>( Flags ), .revents = 0 };
+    //     return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
+    // }
+    auto Server::RequestQueue::WaitForListenSocket( int Timeout ) const -> bool
     {
-        typedef struct FCGX_Stream_Data
+        constexpr unsigned int Flags = POLLIN;
+        auto PollFD = pollfd{ .fd = ListenSocket, .events = static_cast<short>( Flags ), .revents = {} };
+        return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
+
+        // return PollFor( ListenSocket, POLLIN, Timeout );
+    }
+    auto Server::RequestQueue::ListenSocketActivated() const -> bool { return WaitForListenSocket( 0 ); }
+    auto Server::RequestQueue::NextRequest() const -> Request { return Request{ ListenSocket }; }
+    auto Server::RequestQueue::Iterator::operator++() & -> Iterator& { return *this; }  //no-op
+    auto Server::RequestQueue::Iterator::operator*() const -> Request { return AttachedQueue.ListenSocketActivated() ? AttachedQueue.NextRequest() : Request{}; }
+    auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool
+    {
+        // auto _ = ScopedTimer( "WaitForListenSocket" );
+        return ! AttachedQueue.WaitForListenSocket();
+    }
+
+    auto Server::RequestQueue::begin() const -> Iterator { return { *this }; }
+    auto Server::RequestQueue::end() const -> Sentinel { return {}; }
+
+    // this is THE primary constructor
+    Server::Server( SocketFileDescriptor ListenSocket ) : RequestQueue{ ListenSocket }
+    {
+        ServerInitialization();
+        std::println( "Server file descriptor : {}", static_cast<int>( ListenSocket ) );
+        std::println( "Unix Socket Path : {}", UnixSocketName( ListenSocket ).c_str() );
+        std::println( "Ready to accept requests..." );
+    }
+
+    // Server::Server() : Server{ SocketFileDescriptor{} }{}
+    Server::Server() : Server( Config::LaunchOptionSocketPath().value_or( Config::DefaultSocketPath() ) ) {}
+    Server::Server( const FS::path& SocketPath )
+        : Server( SocketPath.empty()  //
+                      ? SocketFileDescriptor{}
+                      : FCGX_OpenSocket( SocketPath.c_str(), Config::DefaultBackLogNumber ) )
+    {
+        auto FD = RequestQueue.ListenSocket;
+        if( FD == -1 )
         {
-            unsigned char* buff;
-            int bufflen;
-            unsigned char* mBuff;
-            unsigned char* buffStop;
-            int type;
-            int eorStop;
-            int skip;
-            int contentLen;
-            int paddingLen;
-            int isAnythingWritten;
-            int rawWrite;
-            FCGX_Request* reqDataPtr;
-        } FCGX_Stream_Data;
-    }  // namespace DebugInfo
+            std::println( "Failed to open socket." );
+            std::exit( -1 );
+        }
+        if( FD > 0 )
+        {
+            FS::permissions( SocketPath, FS::perms::all );
+        }
+    }
 
 }  // namespace EasyFCGI
 
-// enable formatter for HTTP constant objects
-template<typename T>
-requires requires { typename T::FormatAs; }
-struct std::formatter<T> : std::formatter<typename T::FormatAs>
-{
-    auto format( const T& Value, std::format_context& ctx ) const  //
-    {
-        return std::formatter<typename T::FormatAs>::format( Value, ctx );
-    }
-};
+#define EXPLICIT_TEMPLATE template
+#else
+#define EXPLICIT_TEMPLATE extern template
+#endif
+
+//explicit template instantiation
+EXPLICIT_TEMPLATE struct std::formatter<HTTP::RequestMethod>;
+EXPLICIT_TEMPLATE struct std::formatter<HTTP::ContentType>;
+
+EXPLICIT_TEMPLATE struct ParseUtil::ConvertToRA<int, 10>;
+EXPLICIT_TEMPLATE const ParseUtil::ConvertToRA<int, 10> ParseUtil::ConvertTo<int>;
+EXPLICIT_TEMPLATE struct ParseUtil::FallBack<int>;
+
+#undef EXPLICIT_TEMPLATE
 
 #endif
+
+
