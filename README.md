@@ -1,13 +1,13 @@
 > # EasyFCGI
 > - C++26 Wrapper for libfcgi
-> - Single header file
->   - ```-D_EASY_FCGI_SEPARATE_COMPILATION``` for separate compilation
 > - Do NOT require spawn-fcgi
+> - Support running as damon
+> - Process command line argument on its own
 ---
 
 > # Quick Start Demo
 > ```c++
-> #include "include/EasyFCGI.hpp"
+> #include "EasyFCGI.h"
 > 
 > int main(){
 >   auto Server = EasyFCGI::Server{"path/to/unix/socket.sock"};
@@ -23,7 +23,7 @@
 
 > # How About Multithreading
 > ```c++
-> #include "include/EasyFCGI.hpp"
+> #include "EasyFCGI.h"
 > #include <vector>
 > #include <thread>
 > 
@@ -78,7 +78,7 @@
 > # Requirements
 > - Compiler with C++26 support
 > - libfcgi
-> - nlohmann/json
+> - nlohmann/json ( included as json.hpp )
 > - NOT to be used with spawn-fcgi
 ---
 
