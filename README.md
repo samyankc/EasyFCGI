@@ -7,7 +7,7 @@
 
 > # Quick Start Demo
 > ```c++
-> #include "EasyFCGI.h"
+> #include "EasyFCGI/EasyFCGI.h"
 > 
 > int main(){
 >   auto Server = EasyFCGI::Server{"path/to/unix/socket.sock"};
@@ -23,7 +23,7 @@
 
 > # How About Multithreading
 > ```c++
-> #include "EasyFCGI.h"
+> #include "EasyFCGI/EasyFCGI.h"
 > #include <vector>
 > #include <thread>
 > 
