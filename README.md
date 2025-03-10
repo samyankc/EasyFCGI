@@ -82,6 +82,14 @@
 > - NOT to be used with spawn-fcgi
 ---
 
+> # Usage
+> - with CMake
+> ```cmake
+> add_subdirectory(EasyFCGI)
+> link_libraries(EasyFCGI::EasyFCGI)
+> ```
+---
+
 > # Remark
 > fastcgi_keep_conn is ignored due to compatibility issues
 ---
