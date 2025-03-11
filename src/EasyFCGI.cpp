@@ -601,7 +601,12 @@ namespace EasyFCGI
         static void Daemonize()
         {
             std::println( "Application will run as daemon." );
-            ::daemon( true, true );  // is it necessary to do double fork?
+            auto Error = ::daemon( true, true );  // is it necessary to do double fork?
+            if( Error == -1 )
+            {
+                std::println( "[ Error {} ] {}\n Fail to daemonize", errno, strerrordesc_np( errno ) );
+                exit( errno );
+            }
         }
 
         static void PrepareIOFiles()
@@ -640,7 +645,11 @@ namespace EasyFCGI
             std::println( PidFile, "{}", getpid() );
             std::fclose( PidFile );
 
-            std::freopen( "/dev/null", "r", stdin );
+            if( std::freopen( "/dev/null", "r", stdin ) == nullptr )
+            {
+                std::println( "[ Error {} ] {}\n Fail to redirect stdin to /dev/null", errno, strerrordesc_np( errno ) );
+                exit( errno );
+            }
 
             auto LogFilePathStr = Config::LogFilePath.c_str();
             // auto LogFileFD = ::open( LogFilePathStr, O_RDWR | O_CREAT | O_APPEND | O_NOCTTY, S_IRUSR | S_IWUSR );
@@ -649,8 +658,12 @@ namespace EasyFCGI
             if( LogFile == nullptr || ErrFile == nullptr )
             {
                 std::println( "[ Error {} ] {}\n Fail to open log/err file : {}\nRedirect IO to /dev/null", errno, strerrordesc_np( errno ), LogFilePathStr );
-                std::freopen( "/dev/null", "a+", stdout );
-                std::freopen( "/dev/null", "a+", stderr );
+                if( std::freopen( "/dev/null", "a+", stdout ) == nullptr ||  //
+                    std::freopen( "/dev/null", "a+", stderr ) == nullptr )
+                {
+                    std::println( "[ Error {} ] {}\n Fail to redirect stdout/stderr to /dev/null", errno, strerrordesc_np( errno ) );
+                    exit( errno );
+                }
             }
 
             std::fflush( stdout );
