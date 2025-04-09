@@ -24,7 +24,13 @@ namespace
         }
         return Buffer;
     }
+
 }  // namespace
+
+namespace glz
+{
+    bool operator==( const json_t& LHS, const json_t& RHS ) { return LHS.data == RHS.data; }
+}
 
 namespace EasyFCGI
 {
@@ -110,6 +116,18 @@ namespace EasyFCGI
 
     }  // namespace Config
 
+    auto DumpJson( const EasyFCGI::Json& J ) -> std::string
+    {
+        if( auto TryDump = J.dump() )
+        {
+            return std::move( TryDump.value() );
+        }
+        else
+        {
+            return std::format( R"({{"DumpError":"{}"}})", TryDump.error().custom_error_message );
+        }
+    }
+
     auto TerminationSource = std::stop_source{};
     std::stop_token TerminationToken = TerminationSource.get_token();
 
@@ -139,8 +157,8 @@ namespace EasyFCGI
     Response& Response::operator=( std::string Value ) & { return SetBody( std::move( Value ) ); }
     Response& Response::operator+=( std::string_view Value ) & { return Append( Value ); }
 
-    Response& Response::SetBody( const Json& Value ) & { return SetBody( Value.dump() ); }
-    Response& Response::Append( const Json& Value ) & { return Append( StrView{ Value.dump() } ); }
+    Response& Response::SetBody( const Json& Value ) & { return SetBody( DumpJson( Value ) ); }
+    Response& Response::Append( const Json& Value ) & { return Append( StrView{ DumpJson( Value ) } ); }
     Response& Response::operator=( const Json& Value ) & { return SetBody( Value ); }
     Response& Response::operator+=( const Json& Value ) & { return Append( Value ); }
 
@@ -163,13 +181,13 @@ namespace EasyFCGI
 
     auto Request::Query::StringDump( const EasyFCGI::Json& Json ) -> std::string  //
     {
-        return Json.is_string() ? Json.template get<std::string>() : Json.dump();
+        return Json.is_string() ? Json.get_string() : DumpJson( Json );
     }
     auto Request::Query::GetOptional( StrView Key, std::size_t Index ) const -> std::optional<std::string>
     {
         if( ! Json.contains( Key ) ) return std::nullopt;
         const auto& Slot = Json[Key];
-        if( Slot.is_array() && Slot.size() > Index ) return StringDump( Slot[Index] );
+        if( Slot.is_array() && Slot.size() > Index ) return StringDump( Slot[auto{ Index }] );
         if( Index > 0 ) return std::nullopt;
         return StringDump( Slot );
     }
@@ -276,7 +294,7 @@ namespace EasyFCGI
     auto Request::Parse() -> int
     {
         using namespace ParseUtil;
-        Query.Json = {};  // .clear() cannot reset residual discarded state
+        Query.Json.reset();
         Files.Storage.clear();
         Payload.clear();
 
@@ -292,7 +310,9 @@ namespace EasyFCGI
                                       } );
 
         auto QueryAppend = [&Result = Query.Json]( std::string_view Key, auto&& Value ) {
-            if( ! Key.empty() ) Result[Key].push_back( std::forward<decltype( Value )>( Value ) );
+            if( Key.empty() ) return;
+            if( ! Result.contains( Key ) || ! Result[Key].is_array() ) Result[Key] = Json::array_t{};
+            Result[Key].get_array().push_back( std::forward<decltype( Value )>( Value ) );
         };
 
         {
@@ -361,8 +381,8 @@ namespace EasyFCGI
                 }
                 case HTTP::Content::Application::Json :
                 {
-                    Query.Json = Json::parse( Payload, nullptr, false );  // disable exception
-                    if( Query.Json.is_discarded() )
+                    auto ParseResult = glz::read_json( Query.Json, Payload );
+                    if( ParseResult != glz::error_code::none )
                     {  // parse error
                         // early response with error message
                         // caller does not see this iteration
@@ -373,8 +393,9 @@ namespace EasyFCGI
                                    "Invalid Json.",
                                    FCGX_Request_Ptr->out );
 
+                        std::println( "{}\n", ParseResult.custom_error_message );
                         std::println( "Responding 400 Bad Request to Request with invalid Json.\nReady to accept new request..." );
-
+                        std::fflush( stdout );
                         // re-using FCGX_Request struct, parse again
                         if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
                         return -1;
@@ -525,7 +546,7 @@ namespace EasyFCGI
         if( Query.Json.empty() )
             Result += "Query Json: []\n";
         else
-            Result += std::format( "Query Json: [\n{}\n]\n", Query.Json.dump( 2 ) );
+            Result += std::format( "Query Json: [\n{}\n]\n", DumpJson( Query.Json ) );
 
         if( Files.Storage.empty() )
             Result += "Files: []\n";
@@ -621,16 +642,18 @@ namespace EasyFCGI
             auto PidFilePathStr = Config::PidFilePath.c_str();
             if( FS::exists( Config::PidFilePath ) )
             {
-                if( auto PID = ReadContent( Config::PidFilePath ).data() | ConvertTo<int> )
+                if( auto PID = ReadContent( Config::PidFilePath ).data() | ConvertTo<int> | ParseUtil::FallBack( 0 ) )
                 {
-                    auto EXE = FS::path( "/proc/{}/exe"_FMT( PID.value() ) );
+                    auto EXE = FS::path( "/proc/{}/exe"_FMT( PID ) );
                     if( FS::exists( EXE ) && FS::is_symlink( EXE ) &&  //
-                        FS::read_symlink( EXE ) == FS::read_symlink( "/proc/self/exe" ) )
+                        StrView{ FS::read_symlink( EXE ).c_str() }.starts_with( FS::read_symlink( "/proc/self/exe" ).c_str() ) )
                     {
-                        ::kill( PID.value(), SIGTERM );
+                        ::kill( PID, SIGTERM );
                         std::println( "Previous Daemon Process Detected. Terminating." );
+                        auto Retry = 5;
                         while( FS::exists( EXE ) )
                         {
+                            if( --Retry <= 0 ) ::kill( PID, SIGKILL );
                             std::println( "Waiting previous daemon process to terminate." );
                             std::fflush( stdout );
                             std::this_thread::sleep_for( 200ms );

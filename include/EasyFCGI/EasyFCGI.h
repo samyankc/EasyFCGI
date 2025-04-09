@@ -1,6 +1,11 @@
 #ifndef _EASY_FCGI_H
 #define _EASY_FCGI_H
 
+// #ifdef GLZ_NULL_TERMINATED
+// #undef GLZ_NULL_TERMINATED
+// #endif
+// #define GLZ_NULL_TERMINATED false
+
 #include <fcgiapp.h>
 #include <csignal>
 #include <memory>
@@ -19,7 +24,13 @@
 #include <sys/poll.h>
 #include <thread>
 #include <stop_token>
-#include "json.hpp"
+#include <cstdint>
+#include "glaze/glaze.hpp"
+
+namespace glz
+{
+    bool operator==( const json_t&, const json_t& );
+}
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -327,6 +338,15 @@ namespace ParseUtil
             }
         };
 
+        template<typename T>
+        struct ToRA : RNG::range_adaptor_closure<ToRA<T>>
+        {
+            constexpr static auto operator()( const auto& Input ) { return T{ RNG::begin( Input ), RNG::end( Input ) }; }
+        };
+
+        template<typename T>
+        [[maybe_unused]] constexpr auto To = ToRA<T>{};
+
     }  // namespace RangeAdaptor
 
     [[nodiscard]]
@@ -553,7 +573,7 @@ namespace EasyFCGI
     namespace FS = std::filesystem;
     namespace RNG = std::ranges;
     namespace VIEW = std::views;
-    using Json = nlohmann::json;
+    using Json = glz::json_t;
     using StrView = std::string_view;
 
     namespace Config
@@ -567,6 +587,8 @@ namespace EasyFCGI
         auto LaunchOptionContains( StrView ) -> bool;                 // only target switch option format : -abc / --foo
         auto LaunchOptionValue( StrView ) -> std::optional<StrView>;  // only target option with arg : --foo=bar / --foo baz
     }  // namespace Config
+
+    auto DumpJson( const EasyFCGI::Json& ) -> std::string;
 
     // extern std::stop_source TerminationSource;
     extern std::stop_token TerminationToken;
