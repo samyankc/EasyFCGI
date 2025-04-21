@@ -30,6 +30,7 @@
 namespace glz
 {
     bool operator==( const json_t&, const json_t& );
+    bool operator==( const raw_json&, const raw_json& );
 }
 
 using namespace std::chrono_literals;
