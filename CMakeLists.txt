@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.30)
 project(EasyFCGI
-        VERSION 1.1
+        VERSION 1.2
         LANGUAGES CXX)
 
 add_library(EasyFCGI OBJECT src/EasyFCGI.cpp)
