@@ -150,18 +150,18 @@ namespace EasyFCGI
         Body = std::move( Value );
         return *this;
     }
+
     Response& Response::Append( std::string_view Value ) &
     {
         Body += Value;
         return *this;
     }
-    Response& Response::operator=( std::string Value ) & { return SetBody( std::move( Value ) ); }
-    Response& Response::operator+=( std::string_view Value ) & { return Append( Value ); }
+
+    Response& Response::SetBody( const char* Value ) & { return SetBody( std::string{ Value } ); }
+    Response& Response::Append( const char* Value ) & { return Append( StrView{ Value } ); }
 
     Response& Response::SetBody( const Json& Value ) & { return SetBody( DumpJson( Value ) ); }
     Response& Response::Append( const Json& Value ) & { return Append( StrView{ DumpJson( Value ) } ); }
-    Response& Response::operator=( const Json& Value ) & { return SetBody( Value ); }
-    Response& Response::operator+=( const Json& Value ) & { return Append( Value ); }
 
     Response& Response::Reset() &
     {
@@ -547,7 +547,7 @@ namespace EasyFCGI
         if( Query.Json.empty() )
             Result += "Query Json: []\n";
         else
-            Result += std::format( "Query Json: [\n{}\n]\n", DumpJson( Query.Json ) );
+            Result += std::format( "Query Json: [\n{}\n]\n", glz::write<glz::opts{ .prettify = true }>( Query.Json ).value_or( "{}" ) );
 
         if( Files.Storage.empty() )
             Result += "Files: []\n";

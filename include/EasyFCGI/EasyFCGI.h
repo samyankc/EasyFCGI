@@ -612,13 +612,23 @@ namespace EasyFCGI
 
         Response& SetBody( std::string ) &;
         Response& Append( StrView ) &;
-        Response& operator=( std::string ) &;
-        Response& operator+=( StrView ) &;
+
+        Response& SetBody( const char* ) &;
+        Response& Append( const char* ) &;
 
         Response& SetBody( const Json& ) &;
         Response& Append( const Json& ) &;
-        Response& operator=( const Json& ) &;
-        Response& operator+=( const Json& ) &;
+
+        template<typename T>
+        Response& operator=( T&& Value ) &
+        {
+            return SetBody( std::forward<T>( Value ) );
+        };
+        template<typename T>
+        Response& operator+=( T&& Value ) &
+        {
+            return Append( std::forward<T>( Value ) );
+        };
 
         Response& Reset() &;
     };
