@@ -48,6 +48,8 @@
 #include <atomic>
 #include <concepts>
 
+#include "glaze/thread/atomic.hpp"
+
 namespace glz
 {
    template <typename T>
@@ -57,6 +59,8 @@ namespace glz
       std::atomic<T> value;
 
      public:
+      using value_type = T;
+
       // Default constructor
       constexpr guard() noexcept : value() {}
 
@@ -226,6 +230,10 @@ namespace glz
       {
          return fetch_sub(1);
       }
+
+      bool is_lock_free() const noexcept { return value.is_lock_free(); }
+
+      bool is_lock_free() const volatile noexcept { return value.is_lock_free(); }
    };
 
    // Non-member comparison operators

@@ -18,9 +18,7 @@ namespace glz
    // To support bool and std::atomic<bool> and other custom boolean types
    template <class T>
    concept cli_menu_boolean = requires(T t) {
-      {
-         t
-      } -> std::convertible_to<bool>;
+      { t } -> std::convertible_to<bool>;
    };
 
    namespace detail
@@ -78,22 +76,81 @@ namespace glz
          }();
 
          if (item_number > 0 && item_number <= long(N)) {
-            for_each_short_circuit<N>([&](auto I) {
-               if (I == item_number - 1) {
+            jump_table<N>(
+               [&]<size_t I>() {
                   using E = refl_t<T, I>;
 
                   // MSVC bug requires Index alias here
-                  decltype(auto) func = [&]<size_t I>() -> decltype(auto) {
+                  decltype(auto) func = [&]<size_t J>() -> decltype(auto) {
                      if constexpr (reflectable<T>) {
-                        return get_member(value, get<I>(t));
+                        return get_member(value, get<J>(t));
                      }
                      else {
-                        return get_member(value, get<I>(reflect<T>::values));
+                        return get_member(value, get<J>(reflect<T>::values));
                      }
                   }.template operator()<I>();
 
                   using Func = decltype(func);
-                  if constexpr (std::is_invocable_v<Func>) {
+                  if constexpr (std::is_member_function_pointer_v<std::decay_t<Func>>) {
+                     using F = std::decay_t<Func>;
+                     using Ret = typename return_type<F>::type;
+                     using Tuple = typename inputs_as_tuple<F>::type;
+                     constexpr auto n_args = glz::tuple_size_v<Tuple>;
+
+                     if constexpr (n_args == 0) {
+                        if constexpr (std::same_as<Ret, void>) {
+                           (value.*func)();
+                        }
+                        else {
+                           const auto result = glz::write<Opts>((value.*func)()).value_or("result serialization error");
+                           std::printf("%.*s\n", int(result.size()), result.data());
+                        }
+                     }
+                     else if constexpr (n_args == 1) {
+                        using Params = glz::tuple_element_t<0, Tuple>;
+                        using P = std::decay_t<Params>;
+                        constexpr auto N = glz::tuple_size_v<Tuple>;
+                        static_assert(N == 1, "Only one input is allowed for your function");
+                        static thread_local std::array<char, 256> input{};
+                        if constexpr (is_help<P>) {
+                           std::printf("%.*s\n", int(P::help_message.size()), P::help_message.data());
+                           print_input_type<typename P::value_type>();
+                        }
+                        else {
+                           print_input_type<P>();
+                        }
+
+                        if (fgets(input.data(), int(input.size()), stdin)) {
+                           std::string_view input_sv{input.data()};
+                           if (input_sv.back() == '\n') {
+                              input_sv = input_sv.substr(0, input_sv.size() - 1);
+                           }
+                           P params{};
+                           const auto ec = glz::read<Opts>(params, input_sv);
+                           if (ec) {
+                              const auto error = glz::format_error(ec, input_sv);
+                              std::printf("%.*s\n", int(error.size()), error.data());
+                           }
+                           else {
+                              if constexpr (std::same_as<Ret, void>) {
+                                 (value.*func)(params);
+                              }
+                              else {
+                                 const auto result =
+                                    glz::write<Opts>((value.*func)(params)).value_or("result serialization error");
+                                 std::printf("%.*s\n", int(result.size()), result.data());
+                              }
+                           }
+                        }
+                        else {
+                           std::fprintf(stderr, "Invalid input.\n");
+                        }
+                     }
+                     else {
+                        static_assert(false_v<Func>, "function cannot have more than one input");
+                     }
+                  }
+                  else if constexpr (std::is_invocable_v<Func>) {
                      using R = std::invoke_result_t<Func>;
                      if constexpr (std::same_as<R, void>) {
                         func();
@@ -159,10 +216,8 @@ namespace glz
                   else {
                      static_assert(false_v<Func>, "Your function is not invocable or not concrete");
                   }
-                  return true; // exit
-               }
-               return false; // continue
-            });
+               },
+               item_number - 1);
          }
          else {
             std::fprintf(stderr, "Invalid menu item.\n");
@@ -198,7 +253,10 @@ namespace glz
                }();
 
                using Func = decltype(func);
-               if constexpr (std::is_invocable_v<Func>) {
+               if constexpr (std::is_member_function_pointer_v<std::decay_t<Func>>) {
+                  std::printf("  %d   %.*s\n", uint32_t(I + 1), int(key.size()), key.data());
+               }
+               else if constexpr (std::is_invocable_v<Func>) {
                   std::printf("  %d   %.*s\n", uint32_t(I + 1), int(key.size()), key.data());
                }
                else if constexpr (is_invocable_concrete<std::remove_cvref_t<Func>>) {
@@ -235,6 +293,7 @@ namespace glz
             }
             std::string_view str{buf, size_t(it - buf)};
             if (str == "cls" || str == "clear") {
+               std::printf("\n");
                continue;
             }
 

@@ -520,7 +520,7 @@ namespace glz
                   schema_val.attributes.title = ids[I];
                }
 
-               if constexpr ((glaze_object_t<V> || reflectable<V>)&&not tag_v<T>.empty()) {
+               if constexpr ((glaze_object_t<V> || reflectable<V>) && not tag_v<T>.empty()) {
                   if (not schema_val.required) {
                      schema_val.required = std::vector<sv>{}; // allocate
                   }
@@ -572,7 +572,7 @@ namespace glz
       template <const std::string_view& ref>
       auto consteval validate_ref() noexcept -> void
       {
-#if __cpp_static_assert >= 202306L
+#if (__cpp_static_assert >= 202306L) && (__cplusplus > 202302L)
          static_assert(!has_slash(ref),
                        join_v<chars<"Slash in name: \"">, ref, chars<"\" in json schema references is not allowed">>);
 #else
@@ -663,8 +663,14 @@ namespace glz
             s.additionalProperties = false;
          }
       };
-
    }
+
+   // Moved definition outside of write_json_schema to fix MSVC bug
+   template <class Opts>
+   struct opts_write_type_info_off : std::decay_t<Opts>
+   {
+      bool write_type_info = false;
+   };
 
    template <class T, auto Opts = opts{}, class Buffer>
    [[nodiscard]] error_ctx write_json_schema(Buffer&& buffer)
@@ -672,11 +678,9 @@ namespace glz
       detail::schematic s{};
       s.defs.emplace();
       detail::to_json_schema<std::decay_t<T>>::template op<Opts>(s, *s.defs);
-      struct opts_write_type_info_off : std::decay_t<decltype(Opts)>
-      {
-         bool write_type_info = false;
-      };
-      return write<opts_write_type_info_off{{Opts}}>(std::move(s), std::forward<Buffer>(buffer));
+      // Making this static constexpr options to fix MSVC bug
+      static constexpr opts options = opts_write_type_info_off<decltype(Opts)>{{Opts}};
+      return write<options>(std::move(s), std::forward<Buffer>(buffer));
    }
 
    template <class T, auto Opts = opts{}>

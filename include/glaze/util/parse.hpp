@@ -386,7 +386,7 @@ namespace glz
    }
 
    template <string_literal str, auto Opts>
-      requires(has_is_padded(Opts) && str.size() <= padding_bytes)
+      requires(check_is_padded(Opts) && str.size() <= padding_bytes)
    GLZ_ALWAYS_INLINE void match(is_context auto&& ctx, auto&& it, auto&&) noexcept
    {
       static constexpr auto S = str.sv();
@@ -399,7 +399,7 @@ namespace glz
    }
 
    template <string_literal str, auto Opts>
-      requires(!has_is_padded(Opts))
+      requires(!check_is_padded(Opts))
    GLZ_ALWAYS_INLINE void match(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
       const auto n = size_t(end - it);
@@ -419,8 +419,7 @@ namespace glz
          ctx.error = error_code::unexpected_end;
       }
       else if (*it == '/') {
-         while (++it != end && *it != '\n')
-            ;
+         while (++it != end && *it != '\n');
       }
       else if (*it == '*') {
          while (++it != end) {
@@ -675,10 +674,10 @@ namespace glz
    }
 
    template <auto Opts>
-      requires(has_is_padded(Opts))
+      requires(check_is_padded(Opts))
    GLZ_ALWAYS_INLINE void skip_string(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
-      if constexpr (!has_opening_handled(Opts)) {
+      if constexpr (!check_opening_handled(Opts)) {
          ++it;
       }
 
@@ -765,10 +764,10 @@ namespace glz
    }
 
    template <auto Opts>
-      requires(not has_is_padded(Opts))
+      requires(not check_is_padded(Opts))
    GLZ_ALWAYS_INLINE void skip_string(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
-      if constexpr (!has_opening_handled(Opts)) {
+      if constexpr (!check_opening_handled(Opts)) {
          ++it;
       }
 
@@ -817,7 +816,7 @@ namespace glz
    }
 
    template <auto Opts, char open, char close, size_t Depth = 1>
-      requires(has_is_padded(Opts) && not bool(Opts.comments))
+      requires(check_is_padded(Opts) && not bool(Opts.comments))
    GLZ_ALWAYS_INLINE void skip_until_closed(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
       size_t depth = Depth;
@@ -865,7 +864,7 @@ namespace glz
    }
 
    template <auto Opts, char open, char close, size_t Depth = 1>
-      requires(has_is_padded(Opts) && bool(Opts.comments))
+      requires(check_is_padded(Opts) && bool(Opts.comments))
    GLZ_ALWAYS_INLINE void skip_until_closed(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
       size_t depth = Depth;
@@ -920,7 +919,7 @@ namespace glz
    }
 
    template <auto Opts, char open, char close, size_t Depth = 1>
-      requires(!has_is_padded(Opts) && not bool(Opts.comments))
+      requires(!check_is_padded(Opts) && not bool(Opts.comments))
    GLZ_ALWAYS_INLINE void skip_until_closed(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
       size_t depth = Depth;
@@ -1004,7 +1003,7 @@ namespace glz
    }
 
    template <auto Opts, char open, char close, size_t Depth = 1>
-      requires(!has_is_padded(Opts) && bool(Opts.comments))
+      requires(!check_is_padded(Opts) && bool(Opts.comments))
    GLZ_ALWAYS_INLINE void skip_until_closed(is_context auto&& ctx, auto&& it, auto&& end) noexcept
    {
       size_t depth = Depth;

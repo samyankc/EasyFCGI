@@ -16,6 +16,8 @@
 #endif
 #endif
 
+#include "glaze/thread/value_proxy.hpp"
+
 // Provides a thread-safe vector
 // Uses simple proxy objects with appropriate locks for read/write operations
 
@@ -352,5 +354,32 @@ namespace glz
       }
 
       friend void swap(async_vector& a, async_vector& b) noexcept { a.swap(b); }
+   };
+}
+
+namespace glz
+{
+   template <uint32_t Format, class T>
+      requires(is_specialization_v<T, glz::async_vector>)
+   struct from<Format, T>
+   {
+      template <auto Opts>
+      static void op(auto&& value, is_context auto&& ctx, auto&& it, auto&& end) noexcept
+      {
+         auto proxy = value.write();
+         parse<Format>::template op<Opts>(*proxy, ctx, it, end);
+      }
+   };
+
+   template <uint32_t Format, class T>
+      requires(is_specialization_v<T, glz::async_vector>)
+   struct to<Format, T>
+   {
+      template <auto Opts>
+      static void op(auto&& value, is_context auto&& ctx, auto&&... args) noexcept
+      {
+         auto proxy = value.read();
+         serialize<Format>::template op<Opts>(*proxy, ctx, args...);
+      }
    };
 }
