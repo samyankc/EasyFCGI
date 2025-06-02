@@ -132,6 +132,20 @@ namespace EasyFCGI
     auto TerminationSource = std::stop_source{};
     std::stop_token TerminationToken = TerminationSource.get_token();
 
+    namespace SleepFor_Helper
+    {
+        thread_local auto CVA = std::condition_variable_any{};
+        thread_local auto DummyMutex = std::mutex{};
+        thread_local auto DummyLock = std::unique_lock{ DummyMutex };
+    }
+
+    auto SleepFor( Clock::duration SleepDuartion ) -> bool
+    {
+        using namespace SleepFor_Helper;
+        CVA.wait_for( DummyLock, TerminationToken, SleepDuartion, std::false_type{} );
+        return ! TerminationToken.stop_requested();
+    }
+
     Response& Response::Set( HTTP::StatusCode NewValue ) & { return StatusCode = NewValue, *this; }
     Response& Response::Set( HTTP::ContentType NewValue ) & { return ContentType = NewValue, *this; }
     Response& Response::SetHeader( const std::string& Key, std::string Value ) &

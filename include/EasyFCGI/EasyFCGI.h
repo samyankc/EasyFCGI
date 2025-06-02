@@ -15,6 +15,7 @@
 #include <ranges>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <chrono>
@@ -568,6 +569,7 @@ namespace EasyFCGI
     namespace VIEW = std::views;
     using Json = glz::json_t;
     using StrView = std::string_view;
+    using Clock = std::chrono::system_clock;
 
     namespace Config
     {
@@ -585,6 +587,11 @@ namespace EasyFCGI
 
     // extern std::stop_source TerminationSource;
     extern std::stop_token TerminationToken;
+
+    // Return:
+    // [ true ]  if successfully slept for Duration;
+    // [ false ] if TerminationToken activated
+    auto SleepFor(Clock::duration Duration) -> bool;
 
     using SocketFileDescriptor = decltype( FCGX_OpenSocket( {}, {} ) );
     using ConnectionFileDescriptor = decltype( ::accept( {}, {}, {} ) );
