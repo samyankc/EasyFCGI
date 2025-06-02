@@ -78,7 +78,7 @@
 > # Requirements
 > - Compiler with C++26 support
 > - libfcgi
-> - nlohmann/json ( included as json.hpp )
+> - glaze/json ( included )
 > - NOT to be used with spawn-fcgi
 ---
 
