@@ -8,8 +8,8 @@
 template struct std::formatter<HTTP::RequestMethod>;
 template struct std::formatter<HTTP::ContentType>;
 template struct ParseUtil::ConvertToRA<int, 10>;
-template const ParseUtil::ConvertToRA<int, 10> ParseUtil::ConvertTo<int>;
 template struct ParseUtil::FallBack<int>;
+template const ParseUtil::ConvertToRA<int, 10> ParseUtil::ConvertTo<int>;
 
 namespace
 {
@@ -40,7 +40,7 @@ namespace EasyFCGI
     inline namespace Concept
     {
         template<typename T>
-        concept DumpingString = requires( T&& t ) {
+        concept DumpingString [[deprecated]] = requires( T&& t ) {
             { t.dump() } -> std::same_as<std::string>;
         };
     }
@@ -277,6 +277,7 @@ namespace EasyFCGI
 
     auto Request::GetParam( StrView ParamName ) const -> StrView
     {
+        if( FCGX_Request_Ptr == nullptr ) return {};
         if( auto Result = FCGX_GetParam( std::data( ParamName ), FCGX_Request_Ptr->envp ) ) return Result;
         return {};
     }
@@ -284,6 +285,7 @@ namespace EasyFCGI
     auto Request::AllHeaderEntries() const -> std::vector<StrView>
     {
         auto Result = std::vector<StrView>{};
+        if( FCGX_Request_Ptr == nullptr ) return Result;
         Result.reserve( 100 );
         for( auto EnvP = FCGX_Request_Ptr->envp; EnvP != nullptr && *EnvP != nullptr; ++EnvP )
         {
@@ -336,37 +338,36 @@ namespace EasyFCGI
                 case HTTP::Content::MultiPart::FormData :
                 {
                     // auto _ = ScopedTimer( "MultipartParseTime" );
+
+                    // remark: by RFC 2046, boundary is at most 70 character long
+                    //         which means ExtendedBoundaryPatternbuffer size is at most 113
+                    constexpr auto BoundaryLengthLimit = 70uz;
                     auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
-                    auto ExtendedBoundaryPattern = "\r\n--{}\r\nContent-Disposition: form-data; name="_FMT( BoundaryPattern );
+                    if( BoundaryPattern.length() > BoundaryLengthLimit ) break;
 
                     // remove trailing boundary to avoid empty ending after split
                     auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
                     if( PayloadView.empty() ) break;
 
-                    auto NameFieldPrefix = StrView{ "name=" };
-                    if( PayloadView.starts_with( ExtendedBoundaryPattern.substr( 2 ) ) )
-                    {  // enable ExtendedBoundaryPattern
-                        BoundaryPattern = ExtendedBoundaryPattern;
-                        NameFieldPrefix = NameFieldPrefix | CollapseToEnd;
-                    }
-                    else
-                    {  // fallback to standard
-                        BoundaryPattern = ExtendedBoundaryPattern | Before( "Content-Disposition" );
-                    }
+                    constexpr auto ExtendedBoundaryFormatString = StrView{ "\r\n--{}\r\nContent-Disposition: form-data; name=" };
+                    char ExtendedBoundaryBuffer[BoundaryLengthLimit + ExtendedBoundaryFormatString.length() - 2];
+                    auto ExtendedBoundaryFormatResult = std::format_to_n( ExtendedBoundaryBuffer, std::size( ExtendedBoundaryBuffer ),  //
+                                                                          ExtendedBoundaryFormatString, BoundaryPattern );
+                    auto ExtendedBoundary = StrView{ ExtendedBoundaryBuffer, ExtendedBoundaryFormatResult.out };
 
-                    PayloadView = PayloadView | TrimLeading( BoundaryPattern.substr( 2 ) );
+                    PayloadView = PayloadView | TrimLeading( ExtendedBoundary.substr( 2 ) );
 
-                    // at this point, PayloadView does not contain BoundaryPattern on both ends.
+                    // at this point, PayloadView does not contain ExtendedBoundary on both ends.
 
-                    for( auto&& Body : PayloadView | SplitBy( BoundaryPattern ) )
+                    for( auto&& PayloadFragment : PayloadView | SplitBy( ExtendedBoundary ) )
                     {
-                        auto [Header, Content] = Body | SplitOnceBy( "\r\n\r\n" );
+                        auto [Header, Content] = PayloadFragment | SplitOnceBy( "\r\n\r\n" );
 
-                        auto Name = Header | After( NameFieldPrefix ) | Between( '"' );
-                        if( Name.empty() ) break;  // should never happen?
+                        auto Name = Header | Between( '"' );
                         auto FileName = Header | After( "filename=" ) | Between( '"' );
                         auto ContentType = Header | After( "\r\n" ) | After( "Content-Type:" ) | TrimSpace;
 
+                        if( Name.empty() ) break;  // should never happen?
                         if( ContentType.empty() )
                         {
                             QueryAppend( Name, Content );
@@ -399,6 +400,7 @@ namespace EasyFCGI
                         std::fflush( stdout );
                         // re-using FCGX_Request struct, parse again
                         if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
+
                         return -1;
                     }
                     break;
@@ -416,7 +418,7 @@ namespace EasyFCGI
         : FCGX_Request_Ptr{ std::make_unique_for_overwrite<FCGX_Request>().release() }
     {
         auto Request_Ptr = FCGX_Request_Ptr.get();
-        (void)FCGX_InitRequest( Request_Ptr, SocketFD, FCGI_FAIL_ACCEPT_ON_INTR );
+        std::ignore = FCGX_InitRequest( Request_Ptr, SocketFD, FCGI_FAIL_ACCEPT_ON_INTR );
         Request_Ptr->keepConnection = 0;  // disable fastcgi_keep_conn
         if( FCGX_Accept_r( Request_Ptr ) == 0 )
         {
@@ -463,22 +465,6 @@ namespace EasyFCGI
         Send( Content );
         Send( "\r\n" );
     }
-
-    // template<typename... Args>
-    // requires( sizeof...( Args ) > 0 )
-    // auto Request::Send( const std::format_string<Args...>& fmt, Args&&... args ) const  //
-    // {
-    //     if( FCGX_Request_Ptr == nullptr ) return;
-    //     std::format_to( OutputIteratorFor( FCGX_Request_Ptr ), fmt, std::forward<Args>( args )... );
-    // }
-
-    // template<typename... Args>
-    // requires( sizeof...( Args ) > 0 )
-    // auto Request::SendLine( const std::format_string<Args...>& fmt, Args&&... args ) const  //
-    // {
-    //     Send( fmt, std::forward<Args>( args )... );
-    //     SendLine();
-    // }
 
     auto Request::FlushHeader() -> HTTP::StatusCode
     {
@@ -530,6 +516,7 @@ namespace EasyFCGI
     auto Request::Dump() const -> std::string
     {
         auto Result = std::string{};
+        if( FCGX_Request_Ptr == nullptr ) Result += "[Dump] This request object is not attached to an actual request.\n";
         Result += std::format( "Method: [{}]\n", Method );
         Result += std::format( "Content Type: [{}]\n", ContentType );
         Result += "Header: [\n";
@@ -743,18 +730,11 @@ namespace EasyFCGI
 
     Server::RequestQueue::RequestQueue( SocketFileDescriptor SourceSocketFD ) : ListenSocket{ SourceSocketFD } {};
 
-    // static auto PollFor( int FD, unsigned int Flags, int Timeout = -1 )
-    // {
-    //     auto PollFD = pollfd{ .fd = FD, .events = static_cast<short>( Flags ), .revents = 0 };
-    //     return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
-    // }
     auto Server::RequestQueue::WaitForListenSocket( int Timeout ) const -> bool
     {
-        constexpr unsigned int Flags = POLLIN;
-        auto PollFD = pollfd{ .fd = ListenSocket, .events = static_cast<short>( Flags ), .revents = {} };
+        constexpr short Flags = POLLIN;
+        auto PollFD = pollfd{ .fd = ListenSocket, .events = Flags, .revents = {} };
         return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
-
-        // return PollFor( ListenSocket, POLLIN, Timeout );
     }
     auto Server::RequestQueue::ListenSocketActivated() const -> bool { return WaitForListenSocket( 0 ); }
     auto Server::RequestQueue::NextRequest() const -> Request { return Request{ ListenSocket }; }
@@ -763,7 +743,7 @@ namespace EasyFCGI
     auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool
     {
         // auto _ = ScopedTimer( "WaitForListenSocket" );
-        return ! AttachedQueue.WaitForListenSocket();
+        return TerminationToken.stop_requested() || ! AttachedQueue.WaitForListenSocket();
     }
 
     auto Server::RequestQueue::begin() const -> Iterator { return { *this }; }

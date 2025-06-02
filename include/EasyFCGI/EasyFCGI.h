@@ -47,9 +47,11 @@ namespace ParseUtil
     template<std::size_t N>
     struct FixedString
     {
-        char Data[N];
-        constexpr FixedString( const char ( &Src )[N] ) noexcept { std::copy_n( Src, N, Data ); }
-        constexpr operator StrView() const noexcept { return { Data, N - 1 }; }
+        char Data[N + 1]{};
+        consteval FixedString( const char ( &Src )[N] ) noexcept { std::copy_n( Src, N, Data ); }
+        consteval auto data() const noexcept { return Data; }
+        consteval std::size_t size() const noexcept { return N - ( Data[N - 1] == '\0' ); }
+        consteval operator StrView() const noexcept { return { Data, size() }; }
     };
 
     template<FixedString FSTR>
@@ -61,7 +63,7 @@ namespace ParseUtil
     struct StrViewPattern
     {
         constexpr static auto ASCII = [] {
-            auto ASCII = std::array<char, 127>{};
+            auto ASCII = std::array<char, 256>{};
             RNG::iota( ASCII, 0 );
             return ASCII;
         }();
@@ -146,18 +148,7 @@ namespace ParseUtil
 
         struct Search : StrViewPattern, RNG::range_adaptor_closure<Search>
         {
-            constexpr auto operator()( StrView Input ) const -> StrView
-            {
-                if consteval
-                {
-                    return StrView{ RNG::search( Input, Pattern ) };
-                }
-                else
-                {
-                    auto [MatchBegin, MatchEnd] = std::boyer_moore_horspool_searcher( Pattern.begin(), Pattern.end() )( Input.begin(), Input.end() );
-                    return { MatchBegin, MatchEnd };
-                }
-            }
+            constexpr auto operator()( StrView Input ) const -> StrView { return StrView{ RNG::search( Input, Pattern ) }; }
             constexpr StrView In( StrView Input ) const { return operator()( Input ); }
         };
 
@@ -782,7 +773,7 @@ struct std::formatter<T> : std::formatter<typename T::FormatAs>
 extern template struct std::formatter<HTTP::RequestMethod>;
 extern template struct std::formatter<HTTP::ContentType>;
 extern template struct ParseUtil::ConvertToRA<int, 10>;
-extern template const ParseUtil::ConvertToRA<int, 10> ParseUtil::ConvertTo<int>;
 extern template struct ParseUtil::FallBack<int>;
+extern template const ParseUtil::ConvertToRA<int, 10> ParseUtil::ConvertTo<int>;
 
 #endif
