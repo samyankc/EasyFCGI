@@ -24,6 +24,7 @@
 #include <sys/poll.h>
 #include <thread>
 #include <stop_token>
+#include <flat_map>
 #include <cstdint>
 #include "glaze/glaze.hpp"
 
@@ -601,8 +602,8 @@ namespace EasyFCGI
     {
         HTTP::StatusCode StatusCode = HTTP::StatusCode::OK;
         HTTP::ContentType ContentType = HTTP::Content::Text::HTML;
-        std::map<std::string, std::string> Header;
-        std::map<std::string, std::string> Cookie;
+        std::flat_map<std::string, std::string> Header;
+        std::flat_map<std::string, std::string> Cookie;
         std::string Body;
 
         Response& Set( HTTP::StatusCode ) &;
@@ -672,7 +673,7 @@ namespace EasyFCGI
                 auto SaveAs( const FS::path&, const OverWriteOptions = Abort ) const -> std::optional<FS::path>;
             };
 
-            std::map<StrView, std::vector<FileView>> Storage;
+            std::flat_map<StrView, std::vector<FileView>> Storage;
             auto operator[]( StrView, std::size_t = 0 ) const -> FileView;
         };
 
