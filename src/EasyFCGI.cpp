@@ -357,11 +357,15 @@ namespace EasyFCGI
                     //         which means ExtendedBoundaryPatternbuffer size is at most 113
                     constexpr auto BoundaryLengthLimit = 70uz;
                     auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
-                    if( BoundaryPattern.length() > BoundaryLengthLimit ) break;
+                    if( BoundaryPattern.length() > BoundaryLengthLimit )  //
+                        [[unlikely]]
+                        break;
 
                     // remove trailing boundary to avoid empty ending after split
                     auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
-                    if( PayloadView.empty() ) break;
+                    if( PayloadView.empty() )  //
+                        [[unlikely]]
+                        break;
 
                     constexpr auto ExtendedBoundaryFormatString = StrView{ "\r\n--{}\r\nContent-Disposition: form-data; name=" };
                     char ExtendedBoundaryBuffer[BoundaryLengthLimit + ExtendedBoundaryFormatString.length() - 2];
@@ -381,7 +385,10 @@ namespace EasyFCGI
                         auto FileName = Header | After( "filename=" ) | Between( '"' );
                         auto ContentType = Header | After( "\r\n" ) | After( "Content-Type:" ) | TrimSpace;
 
-                        if( Name.empty() ) break;  // should never happen?
+                        if( Name.empty() )  // should never happen?
+                            [[unlikely]]
+                            break;
+
                         if( ContentType.empty() )
                         {
                             QueryAppend( Name, Content );
