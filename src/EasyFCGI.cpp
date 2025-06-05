@@ -1,8 +1,11 @@
 #include "EasyFCGI/EasyFCGI.h"
+#include <fcgiapp.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstddef>
 #include <cstdio>
 #include <array>
+#include <print>
 
 //explicit template instantiation
 template struct std::formatter<HTTP::RequestMethod>;
@@ -308,6 +311,29 @@ namespace EasyFCGI
         return Result;
     }
 
+    auto Request::Accept() -> int
+    {
+        if( FCGX_Request_Ptr == nullptr )
+        {
+            std::println( "[ Fail ] Invoking Request::Accept() with null FCGX_Request_Ptr always fails." );
+            return -1;
+        }
+
+        if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 )
+        {
+            if( Parse() == 0 ) return 0;
+            return Accept();  // invalid request, accept new request
+        }
+
+        // fail to obtain valid request, reset residual request data & allocation
+        // custom deleter of FCGX_Request_Ptr will do the cleanup
+        FCGX_InitRequest( FCGX_Request_Ptr.get(), {}, {} );
+        FCGX_Request_Ptr.reset();
+
+        if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
+        return -1;
+    }
+
     auto Request::Parse() -> int
     {
         using namespace ParseUtil;
@@ -354,7 +380,6 @@ namespace EasyFCGI
                     // auto _ = ScopedTimer( "MultipartParseTime" );
 
                     // remark: by RFC 2046, boundary is at most 70 character long
-                    //         which means ExtendedBoundaryPatternbuffer size is at most 113
                     constexpr auto BoundaryLengthLimit = 70uz;
                     auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
                     if( BoundaryPattern.length() > BoundaryLengthLimit )  //
@@ -419,9 +444,6 @@ namespace EasyFCGI
                         std::println( "{}\n", ParseResult.custom_error_message );
                         std::println( "Responding 400 Bad Request to Request with invalid Json.\nReady to accept new request..." );
                         std::fflush( stdout );
-                        // re-using FCGX_Request struct, parse again
-                        if( FCGX_Accept_r( FCGX_Request_Ptr.get() ) == 0 ) return Parse();
-
                         return -1;
                     }
                     break;
@@ -431,9 +453,7 @@ namespace EasyFCGI
         return 0;
     }
 
-    Request::Request() = default;
-    Request::Request( Request&& Other ) = default;
-    // Request::Request( const Request& ) = delete;
+    Request::operator bool() const { return FCGX_Request_Ptr != nullptr; }
 
     Request::Request( SocketFileDescriptor SocketFD )  //
         : FCGX_Request_Ptr{ std::make_unique_for_overwrite<FCGX_Request>().release() }
@@ -441,18 +461,6 @@ namespace EasyFCGI
         auto Request_Ptr = FCGX_Request_Ptr.get();
         std::ignore = FCGX_InitRequest( Request_Ptr, SocketFD, FCGI_FAIL_ACCEPT_ON_INTR );
         Request_Ptr->keepConnection = 0;  // disable fastcgi_keep_conn
-        if( FCGX_Accept_r( Request_Ptr ) == 0 )
-        {
-            // FCGX_Request_Ptr ready, setup the rest of request object(parse request)
-            if( Parse() == 0 ) return;
-        }
-
-        // fail to obtain valid request, reset residual request data & allocation
-        // custom deleter of FCGX_Request_Ptr will do the cleanup
-        FCGX_InitRequest( Request_Ptr, {}, {} );
-        FCGX_Request_Ptr.reset();
-
-        if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
     }
 
     Request& Request::operator=( Request&& Other ) & = default;
@@ -751,30 +759,38 @@ namespace EasyFCGI
 
     Server::RequestQueue::RequestQueue( SocketFileDescriptor SourceSocketFD ) : ListenSocket{ SourceSocketFD } {};
 
-    auto Server::RequestQueue::WaitForListenSocket( int Timeout ) const -> bool
+    auto Server::RequestQueue::PreparePendingRequest() -> bool
     {
-        constexpr short Flags = POLLIN;
-        auto PollFD = pollfd{ .fd = ListenSocket, .events = Flags, .revents = {} };
-        return ::poll( &PollFD, 1, Timeout ) > 0 && ( PollFD.revents & Flags ) == Flags;
+        if( ! empty() ) return true;
+        PendingRequest = Request{ ListenSocket };
+        return PendingRequest.Accept() == 0;
     }
-    auto Server::RequestQueue::ListenSocketActivated() const -> bool { return WaitForListenSocket( 0 ); }
-    auto Server::RequestQueue::NextRequest() const -> Request { return Request{ ListenSocket }; }
-    auto Server::RequestQueue::Iterator::operator++() & -> Iterator& { return *this; }  //no-op
-    auto Server::RequestQueue::Iterator::operator*() const -> Request { return AttachedQueue.ListenSocketActivated() ? AttachedQueue.NextRequest() : Request{}; }
-    auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool
+    auto Server::RequestQueue::RetrievePendingRequest() -> Request { return std::exchange( PendingRequest, {} ); }
+    auto Server::RequestQueue::DropPendingRequest() -> void { std::ignore = RetrievePendingRequest(); }
+    auto Server::RequestQueue::NextRequest() -> Request
     {
-        // auto _ = ScopedTimer( "WaitForListenSocket" );
-        return TerminationToken.stop_requested() || ! AttachedQueue.WaitForListenSocket();
+        PreparePendingRequest();
+        return RetrievePendingRequest();
     }
 
-    auto Server::RequestQueue::begin() const -> Iterator { return { *this }; }
+    auto Server::RequestQueue::begin() -> Iterator
+    {
+        PreparePendingRequest();
+        return { *this };
+    }
     auto Server::RequestQueue::end() const -> Sentinel { return {}; }
+    auto Server::RequestQueue::empty() const -> bool { return PendingRequest.empty(); }
+
+    auto Server::RequestQueue::Iterator::operator++() & -> Iterator& { return AttachedQueue.PreparePendingRequest(), *this; }
+    auto Server::RequestQueue::Iterator::operator++( int ) -> Iterator { return ++*this; }
+    auto Server::RequestQueue::Iterator::operator*() -> Request { return AttachedQueue.RetrievePendingRequest(); }
+    auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool { return AttachedQueue.empty(); }
 
     // this is THE primary constructor
     Server::Server( SocketFileDescriptor ListenSocket ) : RequestQueue{ ListenSocket }
     {
         ServerInitialization();
-        std::println( "Server file descriptor : {}", static_cast<int>( ListenSocket ) );
+        // std::println( "Server file descriptor : {}", static_cast<int>( ListenSocket ) );
         std::println( "Unix Socket Path : {}", UnixSocketName( ListenSocket ).c_str() );
         std::println( "Log File Path : {}", Config::LogFilePath.c_str() );
         std::println( "PID File Path : {}", Config::PidFilePath.c_str() );

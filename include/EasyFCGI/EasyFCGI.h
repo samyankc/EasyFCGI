@@ -591,10 +591,10 @@ namespace EasyFCGI
     // Return:
     // [ true ]  if successfully slept for Duration;
     // [ false ] if TerminationToken activated
-    auto SleepFor(Clock::duration Duration) -> bool;
+    auto SleepFor( Clock::duration Duration ) -> bool;
 
     using SocketFileDescriptor = decltype( FCGX_OpenSocket( {}, {} ) );
-    using ConnectionFileDescriptor = decltype( ::accept( {}, {}, {} ) );
+    // using ConnectionFileDescriptor = decltype( ::accept( {}, {}, {} ) );
 
     struct Response
     {
@@ -687,10 +687,12 @@ namespace EasyFCGI
 
         auto GetParam( StrView ParamName ) const -> StrView;  // Read FCGI envirnoment variables set up by upstream server
         auto AllHeaderEntries() const -> std::vector<StrView>;
+        auto Accept() -> int;
         auto Parse() -> int;
+        explicit operator bool() const;
 
-        Request();
-        Request( Request&& Other );
+        Request() = default;
+        Request( Request&& Other ) = default;
         Request( const Request& ) = delete;
 
         Request( SocketFileDescriptor );
@@ -737,25 +739,34 @@ namespace EasyFCGI
         struct RequestQueue
         {
             SocketFileDescriptor ListenSocket;
+            Request PendingRequest;
             RequestQueue() = delete;
             RequestQueue( const RequestQueue& ) = delete;
             RequestQueue( SocketFileDescriptor );
-            auto WaitForListenSocket( int Timeout = -1 ) const -> bool;
-            auto ListenSocketActivated() const -> bool;
-            auto NextRequest() const -> Request;
+            auto PreparePendingRequest() -> bool;
+            auto RetrievePendingRequest() -> Request;
+            auto DropPendingRequest() -> void;
+            auto empty() const -> bool;
+
+            // possible usage:
+            // while ( auto R = Server.RequestQueue.NextRequest() ){ ... }
+            auto NextRequest() -> Request;
 
             struct Sentinel
             {};
 
             struct Iterator
             {
-                const RequestQueue& AttachedQueue;
+                using value_type = Request;
+                using difference_type = ssize_t;
+                RequestQueue& AttachedQueue; 
                 auto operator++() & -> Iterator&;
-                auto operator*() const -> Request;
+                auto operator++( int ) -> Iterator;
+                auto operator*() -> Request;
                 auto operator==( Sentinel ) const -> bool;
             };
 
-            auto begin() const -> Iterator;
+            auto begin()  -> Iterator;
             auto end() const -> Sentinel;
         } RequestQueue;
 
