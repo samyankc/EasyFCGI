@@ -8,6 +8,7 @@
 
 #include <fcgiapp.h>
 #include <csignal>
+#include <cstddef>
 #include <memory>
 #include <concepts>
 #include <utility>
@@ -758,15 +759,15 @@ namespace EasyFCGI
             struct Iterator
             {
                 using value_type = Request;
-                using difference_type = ssize_t;
-                RequestQueue& AttachedQueue; 
+                using difference_type = std::ptrdiff_t;
+                RequestQueue* AttachedQueuePtr;
                 auto operator++() & -> Iterator&;
                 auto operator++( int ) -> Iterator;
-                auto operator*() -> Request;
+                auto operator*() const -> Request;
                 auto operator==( Sentinel ) const -> bool;
             };
 
-            auto begin()  -> Iterator;
+            auto begin() -> Iterator;
             auto end() const -> Sentinel;
         } RequestQueue;
 

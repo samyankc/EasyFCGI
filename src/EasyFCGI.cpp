@@ -776,15 +776,15 @@ namespace EasyFCGI
     auto Server::RequestQueue::begin() -> Iterator
     {
         PreparePendingRequest();
-        return { *this };
+        return { this };
     }
     auto Server::RequestQueue::end() const -> Sentinel { return {}; }
     auto Server::RequestQueue::empty() const -> bool { return PendingRequest.empty(); }
 
-    auto Server::RequestQueue::Iterator::operator++() & -> Iterator& { return AttachedQueue.PreparePendingRequest(), *this; }
+    auto Server::RequestQueue::Iterator::operator++() & -> Iterator& { return AttachedQueuePtr->PreparePendingRequest(), *this; }
     auto Server::RequestQueue::Iterator::operator++( int ) -> Iterator { return ++*this; }
-    auto Server::RequestQueue::Iterator::operator*() -> Request { return AttachedQueue.RetrievePendingRequest(); }
-    auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool { return AttachedQueue.empty(); }
+    auto Server::RequestQueue::Iterator::operator*() const -> Request { return AttachedQueuePtr->RetrievePendingRequest(); }
+    auto Server::RequestQueue::Iterator::operator==( Sentinel ) const -> bool { return AttachedQueuePtr->empty(); }
 
     // this is THE primary constructor
     Server::Server( SocketFileDescriptor ListenSocket ) : RequestQueue{ ListenSocket }
