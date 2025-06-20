@@ -40,13 +40,6 @@ namespace EasyFCGI
 {
     using ParseUtil::operator""_FMT;
 
-    inline namespace Concept
-    {
-        template<typename T>
-        concept DumpingString [[deprecated]] = requires( T&& t ) {
-            { t.dump() } -> std::same_as<std::string>;
-        };
-    }
     namespace Config
     {
         int DefaultBackLogNumber = int{ 128 };  // evetually be capped by /proc/sys/net/core/somaxconncat,ie.4096
@@ -134,19 +127,15 @@ namespace EasyFCGI
 
     auto TerminationSource = std::stop_source{};
     std::stop_token TerminationToken = TerminationSource.get_token();
-
-    namespace SleepFor_Helper
-    {
-        thread_local auto CVA = std::condition_variable_any{};
-        thread_local auto DummyMutex = std::mutex{};
-        thread_local auto DummyLock = std::unique_lock{ DummyMutex };
-    }
+    auto TerminationRequested() -> bool { return TerminationToken.stop_requested(); }
 
     auto SleepFor( Clock::duration SleepDuartion ) -> bool
     {
-        using namespace SleepFor_Helper;
-        CVA.wait_for( DummyLock, TerminationToken, SleepDuartion, std::false_type{} );
-        return ! TerminationToken.stop_requested();
+        auto CVA = std::condition_variable_any{};
+        auto DummyMutex = std::mutex{};
+        auto DummyLock = std::unique_lock{ DummyMutex };
+        CVA.wait_for( DummyLock, TerminationToken, SleepDuartion, TerminationRequested );
+        return ! TerminationRequested();
     }
 
     Response& Response::Set( HTTP::StatusCode NewValue ) & { return StatusCode = NewValue, *this; }
@@ -330,7 +319,7 @@ namespace EasyFCGI
         FCGX_InitRequest( FCGX_Request_Ptr.get(), {}, {} );
         FCGX_Request_Ptr.reset();
 
-        if( TerminationToken.stop_requested() ) std::println( "Interrupted FCGX_Accept_r()." );
+        if( TerminationRequested() ) std::println( "Interrupted FCGX_Accept_r()." );
         return -1;
     }
 
@@ -377,8 +366,6 @@ namespace EasyFCGI
                 }
                 case HTTP::Content::MultiPart::FormData :
                 {
-                    // auto _ = ScopedTimer( "MultipartParseTime" );
-
                     // remark: by RFC 2046, boundary is at most 70 character long
                     constexpr auto BoundaryLengthLimit = 70uz;
                     auto BoundaryPattern = GetParam( "CONTENT_TYPE" ) | After( "boundary=" ) | TrimSpace;
@@ -387,16 +374,23 @@ namespace EasyFCGI
                         break;
 
                     // remove trailing boundary to avoid empty ending after split
-                    auto PayloadView = Payload | TrimSpace | TrimTrailing( "--" ) | TrimTrailing( BoundaryPattern ) | TrimTrailing( "\r\n--" );
+                    auto PayloadView = Payload                            //
+                                       | TrimSpace                        //
+                                       | TrimTrailing( "--" )             //
+                                       | TrimTrailing( BoundaryPattern )  //
+                                       | TrimTrailing( "\r\n--" );
                     if( PayloadView.empty() )  //
                         [[unlikely]]
                         break;
 
-                    constexpr auto ExtendedBoundaryFormatString = StrView{ "\r\n--{}\r\nContent-Disposition: form-data; name=" };
-                    char ExtendedBoundaryBuffer[BoundaryLengthLimit + ExtendedBoundaryFormatString.length() - 2];
-                    auto ExtendedBoundaryFormatResult = std::format_to_n( ExtendedBoundaryBuffer, std::size( ExtendedBoundaryBuffer ),  //
-                                                                          ExtendedBoundaryFormatString, BoundaryPattern );
-                    auto ExtendedBoundary = StrView{ ExtendedBoundaryBuffer, ExtendedBoundaryFormatResult.out };
+                    // constexpr auto ExtendedBoundaryFormatString = StrView{ "\r\n--{}\r\nContent-Disposition: form-data; name=" };
+                    // char ExtendedBoundaryBuffer[BoundaryLengthLimit + ExtendedBoundaryFormatString.length() - 2];
+                    // auto ExtendedBoundaryFormatResult = std::format_to_n( ExtendedBoundaryBuffer, std::size( ExtendedBoundaryBuffer ),  //
+                    //                                                       ExtendedBoundaryFormatString, BoundaryPattern );
+                    // auto ExtendedBoundary = StrView{ ExtendedBoundaryBuffer, ExtendedBoundaryFormatResult.out };
+                    auto ExtendedBoundaryBuffer = std::format( "\r\n--{}\r\nContent-Disposition: form-data; name=", BoundaryPattern );
+                    auto ExtendedBoundary = StrView{ ExtendedBoundaryBuffer };
+                    // Remark: ExtendedBoundary is not standard conformant to disallow white space after BoundaryPattern
 
                     PayloadView = PayloadView | TrimLeading( ExtendedBoundary.substr( 2 ) );
 

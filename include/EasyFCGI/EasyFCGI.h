@@ -588,6 +588,7 @@ namespace EasyFCGI
 
     // extern std::stop_source TerminationSource;
     extern std::stop_token TerminationToken;
+    auto TerminationRequested() -> bool;
 
     // Return:
     // [ true ]  if successfully slept for Duration;
