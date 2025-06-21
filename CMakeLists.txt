@@ -20,10 +20,11 @@ add_library(EasyFCGI::EasyFCGI ALIAS EasyFCGI)
 # target_link_libraries(${PROJECT_NAME} PUBLIC glaze::glaze)
 target_link_libraries(${PROJECT_NAME} PUBLIC -lfcgi)
 target_include_directories(${PROJECT_NAME} PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>")
-target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_26)
 set_target_properties(
         ${PROJECT_NAME} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
-        CMAKE_CXX_EXTENSIONS OFF
+        CXX_STANDARD 26
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS OFF
 )
 
