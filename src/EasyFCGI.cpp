@@ -36,6 +36,31 @@ namespace glz
     bool operator==( const raw_json& LHS, const raw_json& RHS ) { return LHS.str == RHS.str; }
 }  // namespace glz
 
+namespace ParseUtil
+{
+    [[nodiscard]]
+    auto HexToChar( StrView HexString ) noexcept -> char
+    {
+        return std::bit_cast<char>( HexString | ConvertTo<unsigned char, 16> | FallBack( '?' ) );
+    }
+
+    [[nodiscard]]
+    auto DecodeURLFragment( StrView Fragment ) -> std::string
+    {
+        constexpr auto EncodeDigitWidth = 2uz;
+        auto Result = std::string{};
+        auto [FirstPart, OtherParts] = Fragment | SplitBy( '%' ) | SplitAt( 1 );
+        for( auto LeadingText : FirstPart ) Result += LeadingText | RestoreSpaceChar;
+        for( auto Segment : OtherParts )
+        {
+            auto [Encoded, Unencoded] = Segment | SplitAt( EncodeDigitWidth );
+            Result += Encoded.length() >= EncodeDigitWidth ? HexToChar( Encoded ) : '?';
+            Result += Unencoded | RestoreSpaceChar;
+        }
+        return Result;
+    }
+}  // namespace ParseUtil
+
 namespace EasyFCGI
 {
     using ParseUtil::operator""_FMT;

@@ -344,27 +344,9 @@ namespace ParseUtil
 
     }  // namespace RangeAdaptor
 
-    [[nodiscard]]
-    static auto HexToChar( StrView HexString ) noexcept
-    {
-        return std::bit_cast<char>( HexString | ConvertTo<unsigned char, 16> | FallBack( '?' ) );
-    }
+    [[nodiscard]] auto HexToChar( StrView HexString ) noexcept -> char;
+    [[nodiscard]] auto DecodeURLFragment( StrView Fragment ) -> std::string;
 
-    [[nodiscard]]
-    static auto DecodeURLFragment( StrView Fragment )
-    {
-        constexpr auto EncodeDigitWidth = 2;
-        auto Result = std::string{};
-        auto [FirstPart, OtherParts] = Fragment | SplitBy( '%' ) | SplitAt( 1 );
-        for( auto LeadingText : FirstPart ) Result += LeadingText | RestoreSpaceChar;
-        for( auto Segment : OtherParts )
-        {
-            auto [Encoded, Unencoded] = Segment | SplitAt( EncodeDigitWidth );
-            Result += Encoded.length() >= EncodeDigitWidth ? HexToChar( Encoded ) : '?';
-            Result += Unencoded | RestoreSpaceChar;
-        }
-        return Result;
-    }
 };  // namespace ParseUtil
 using ParseUtil::ConvertTo;
 
@@ -602,9 +584,9 @@ namespace EasyFCGI
     {
         HTTP::StatusCode StatusCode = HTTP::StatusCode::OK;
         HTTP::ContentType ContentType = HTTP::Content::Text::HTML;
-        std::flat_map<std::string, std::string> Header;
-        std::flat_map<std::string, std::string> Cookie;
-        std::string Body;
+        std::flat_map<std::string, std::string> Header{};
+        std::flat_map<std::string, std::string> Cookie{};
+        std::string Body{};
 
         Response& Set( HTTP::StatusCode ) &;
         Response& Set( HTTP::ContentType ) &;
@@ -666,9 +648,9 @@ namespace EasyFCGI
             struct FileView
             {
                 using enum OverWriteOptions;
-                StrView FileName;
-                StrView ContentType;
-                StrView ContentBody;
+                StrView FileName{};
+                StrView ContentType{};
+                StrView ContentBody{};
 
                 auto SaveAs( const FS::path&, const OverWriteOptions = Abort ) const -> std::optional<FS::path>;
             };
