@@ -19,8 +19,13 @@ namespace glz
    inline constexpr uint32_t NDJSON = 100; // new line delimited JSON
    inline constexpr uint32_t TOML = 400;
    inline constexpr uint32_t STENCIL = 500;
+   inline constexpr uint32_t MUSTACHE = 501;
    inline constexpr uint32_t CSV = 10000;
    inline constexpr uint32_t EETF = 20000;
+
+   // Protocol formats
+   inline constexpr uint32_t REPE = 30000;
+   inline constexpr uint32_t REST = 30100;
 
    // layout
    inline constexpr uint8_t rowwise = 0;
@@ -75,10 +80,8 @@ namespace glz
       uint32_t format = JSON;
       bool null_terminated = GLZ_NULL_TERMINATED; // Whether the input buffer is null terminated
       bool comments = false; // Support reading in JSONC style comments
-      // bool error_on_unknown_keys = true; // Error when an unknown key is encountered
-      bool error_on_unknown_keys = false;
+      bool error_on_unknown_keys = true; // Error when an unknown key is encountered
       bool skip_null_members = true; // Skip writing out params in an object if the value is null
-      bool use_hash_comparison = true; // Will replace some string equality checks with hash checks
       bool prettify = false; // Write out prettified JSON
       bool minified = false; // Require minified input for JSON, which results in faster read performance
       char indentation_char = ' '; // Prettified JSON indentation char
@@ -116,6 +119,7 @@ namespace glz
       uint8_t layout = rowwise; // CSV row wise output/input
       bool use_headers = true; // Whether to write column/row headers in CSV format
       bool append_arrays = false; // When reading into an array the data will be appended if the type supports it
+      bool raw_string = false; // do not decode/encode escaped characters for strings (improves read/write performance)
 
       // INTERNAL OPTIONS
       uint32_t internal{}; // default should be 0
@@ -263,6 +267,16 @@ namespace glz
       }
       else {
          return true;
+      }
+   }
+
+   consteval bool check_raw_string(auto&& Opts)
+   {
+      if constexpr (requires { Opts.raw_string; }) {
+         return Opts.raw_string;
+      }
+      else {
+         return false;
       }
    }
 
