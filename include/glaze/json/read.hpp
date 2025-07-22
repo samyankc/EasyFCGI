@@ -174,6 +174,19 @@ namespace glz
             return;
          }
 
+         // Check for operation-specific skipping
+         if constexpr (meta_has_skip<std::remove_cvref_t<T>>) {
+            if constexpr (meta<std::remove_cvref_t<T>>::skip(Key, {glz::operation::parse})) {
+               skip_value<JSON>::op<Opts>(ctx, it, end);
+               if (bool(ctx.error)) [[unlikely]]
+                  return; // Propagate error from skip_value
+               if constexpr (Opts.error_on_missing_keys || Opts.partial_read) {
+                  ((selected_index = I), ...); // Mark as handled even if skipped
+               }
+               return;
+            }
+         }
+
          using V = refl_t<T, I>;
 
          if constexpr (const_value_v<V>) {
@@ -1423,7 +1436,7 @@ namespace glz
 
    // for types like std::vector, std::array, std::deque, etc.
    template <class T>
-      requires(readable_array_t<T> && (emplace_backable<T> || !resizable<T>) && !emplaceable<T>)
+      requires(readable_array_t<T> && (emplace_backable<T> || is_inplace_vector<T> || !resizable<T>) && !emplaceable<T>)
    struct from<JSON, T>
    {
       template <auto Options>
@@ -1453,7 +1466,7 @@ namespace glz
                --ctx.indentation_level;
             }
             ++it;
-            if constexpr (resizable<T> && not Opts.append_arrays) {
+            if constexpr ((resizable<T> || is_inplace_vector<T>) && not Opts.append_arrays) {
                value.clear();
 
                if constexpr (check_shrink_to_fit(Opts)) {
@@ -1465,7 +1478,7 @@ namespace glz
 
          const size_t ws_size = size_t(it - ws_start);
 
-         static constexpr bool should_append = resizable<T> && Opts.append_arrays;
+         static constexpr bool should_append = (resizable<T> || is_inplace_vector<T>) && Opts.append_arrays;
          if constexpr (not should_append) {
             const auto n = value.size();
 
@@ -1518,9 +1531,18 @@ namespace glz
          }
          else {
             // growing
-            if constexpr (emplace_backable<T>) {
+            if constexpr (emplace_backable<T> || has_try_emplace_back<T>) {
                while (it < end) {
-                  parse<JSON>::op<ws_handled<Opts>()>(value.emplace_back(), ctx, it, end);
+                  if constexpr (has_try_emplace_back<T>) {
+                     if (value.try_emplace_back() != nullptr)
+                        parse<JSON>::op<ws_handled<Opts>()>(value.back(), ctx, it, end);
+                     else
+                        ctx.error = error_code::exceeded_static_array_size;
+                  }
+                  else {
+                     parse<JSON>::op<ws_handled<Opts>()>(value.emplace_back(), ctx, it, end);
+                  }
+
                   if (bool(ctx.error)) [[unlikely]]
                      return;
                   if (skip_ws<Opts>(ctx, it, end)) {
@@ -1607,7 +1629,16 @@ namespace glz
                return;
             }
 
-            auto& item = value.emplace_back();
+            if constexpr (has_try_emplace_back<T>) {
+               if (value.try_emplace_back() == nullptr) [[unlikely]] {
+                  ctx.error = error_code::exceeded_static_array_size;
+                  return;
+               }
+            }
+            else {
+               value.emplace_back();
+            }
+            auto& item = value.back();
 
             using V = std::decay_t<decltype(item)>;
 
