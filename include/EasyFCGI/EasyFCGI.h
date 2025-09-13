@@ -154,6 +154,11 @@ namespace ParseUtil
             constexpr StrView In( StrView Input ) const { return operator()( Input ); }
         };
 
+        struct GreedyBefore : StrViewPattern, RNG::range_adaptor_closure<GreedyBefore>
+        {
+            constexpr StrView operator()( StrView Input ) const { return { Input | Begin, Input | Search( Pattern ) | Begin }; }
+        };
+
         struct Before : StrViewPattern, RNG::range_adaptor_closure<Before>
         {
             constexpr StrView operator()( StrView Input ) const
