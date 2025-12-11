@@ -32,7 +32,7 @@ namespace
 
 namespace glz
 {
-    bool operator==( const json_t& LHS, const json_t& RHS ) { return LHS.data == RHS.data; }
+    bool operator==( const generic& LHS, const generic& RHS ) { return LHS.data == RHS.data; }
     bool operator==( const raw_json& LHS, const raw_json& RHS ) { return LHS.str == RHS.str; }
 }  // namespace glz
 

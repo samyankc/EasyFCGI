@@ -32,7 +32,7 @@
 
 namespace glz
 {
-    bool operator==( const json_t&, const json_t& );
+    bool operator==( const generic&, const generic& );
     bool operator==( const raw_json&, const raw_json& );
 }
 
@@ -555,7 +555,7 @@ namespace EasyFCGI
     namespace FS = std::filesystem;
     namespace RNG = std::ranges;
     namespace VIEW = std::views;
-    using Json = glz::json_t;
+    using Json = glz::generic;
     using StrView = std::string_view;
     using Clock = std::chrono::system_clock;
 
