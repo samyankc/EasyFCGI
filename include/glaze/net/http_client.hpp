@@ -60,6 +60,13 @@ namespace glz
          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       }
 
+      // Check for control characters to prevent CRLF injection
+      for (unsigned char c : url) {
+         if (c < 32 || c == 127) {
+            return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+         }
+      }
+
       // Find protocol
       size_t protocol_end = url.find("://");
       if (protocol_end == std::string_view::npos) {
@@ -67,7 +74,7 @@ namespace glz
       }
 
       std::string protocol(url.substr(0, protocol_end));
-      if (protocol != "http" && protocol != "https") {
+      if (protocol != "http" && protocol != "https" && protocol != "ws" && protocol != "wss") {
          return std::unexpected(std::make_error_code(std::errc::invalid_argument));
       }
 
@@ -113,7 +120,7 @@ namespace glz
 
       uint16_t port = 0;
       if (port_str.empty()) {
-         port = (protocol == "https") ? 443 : 80;
+         port = (protocol == "https" || protocol == "wss") ? 443 : 80;
       }
       else {
          try {
@@ -204,7 +211,8 @@ namespace glz
 
    // Handler function types for streaming
    using http_data_handler = std::function<void(std::string_view data)>;
-   using http_error_handler = std::function<void(std::error_code ec)>;
+   using http_error_handler =
+      std::function<void(std::error_code ec)>; // May carry HTTP statuses via http_status_category()
    using http_connect_handler = std::function<void(const response& headers)>;
    using http_disconnect_handler = std::function<void()>;
 
@@ -217,6 +225,7 @@ namespace glz
       bool is_connected{false};
       std::atomic<bool> should_stop{false};
       stream_read_strategy strategy{stream_read_strategy::bulk_transfer}; // Default strategy
+      std::function<bool(int)> status_is_error{}; // Evaluated before treating status as failure
 
       // Constructor with optional buffer size limit and strategy
       http_stream_connection(size_t max_buffer_size = 1024 * 1024,
@@ -258,6 +267,7 @@ namespace glz
       http_disconnect_handler on_disconnect{};
       std::chrono::seconds timeout{std::chrono::seconds{30}};
       stream_read_strategy strategy{stream_read_strategy::bulk_transfer};
+      std::function<bool(int)> status_is_error{}; // Custom predicate to decide whether a status code should fail
    };
 
    struct http_client
@@ -354,8 +364,8 @@ namespace glz
          std::string method = params.method.empty() ? "GET" : params.method;
 
          return perform_stream_request(method, *url_result, params.body, params.headers, params.timeout,
-                                       params.strategy, params.on_data, params.on_error, params.on_connect,
-                                       params.on_disconnect);
+                                       params.strategy, params.status_is_error, params.on_data, params.on_error,
+                                       params.on_connect, params.on_disconnect);
       }
 
       // Asynchronous GET request
@@ -499,12 +509,17 @@ namespace glz
       std::shared_ptr<http_stream_connection> perform_stream_request(
          const std::string& method, const url_parts& url, const std::string& body,
          const std::unordered_map<std::string, std::string>& headers, std::chrono::seconds timeout,
-         stream_read_strategy strategy, http_data_handler on_data, http_error_handler on_error,
-         http_connect_handler on_connect, http_disconnect_handler on_disconnect)
+         stream_read_strategy strategy, std::function<bool(int)> status_is_error, http_data_handler on_data,
+         http_error_handler on_error, http_connect_handler on_connect, http_disconnect_handler on_disconnect)
       {
          auto connection = std::make_shared<http_stream_connection>(1024 * 1024, strategy);
          connection->socket = connection_pool->get_connection(url.host, url.port);
          connection->timer = std::make_shared<asio::steady_timer>(*async_io_context);
+
+         connection->status_is_error = std::move(status_is_error);
+         if (!connection->status_is_error) {
+            connection->status_is_error = [](int status) { return status >= 400; };
+         }
 
          // Wrap the disconnect handler to return the socket to the pool
          auto internal_on_disconnect = [this, user_on_disconnect = std::move(on_disconnect), connection, url]() {
@@ -700,9 +715,13 @@ namespace glz
                   on_connect(response_headers);
                }
 
-               if (parsed_status->status_code >= 400) {
-                  // Status code indicates an error, so we report it and end the stream.
-                  on_error(std::make_error_code(std::errc::connection_refused)); // Generic error for now
+               const bool status_is_error = connection->status_is_error
+                                               ? connection->status_is_error(parsed_status->status_code)
+                                               : parsed_status->status_code >= 400;
+
+               if (status_is_error) {
+                  // Propagate the precise HTTP status via a dedicated error category.
+                  on_error(make_http_status_error(parsed_status->status_code));
                   if (on_disconnect) on_disconnect();
                   return;
                }

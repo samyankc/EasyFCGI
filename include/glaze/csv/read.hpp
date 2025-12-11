@@ -8,6 +8,7 @@
 #include "glaze/core/opts.hpp"
 #include "glaze/core/read.hpp"
 #include "glaze/core/reflect.hpp"
+#include "glaze/csv/skip.hpp"
 #include "glaze/file/file_ops.hpp"
 #include "glaze/util/glaze_fast_float.hpp"
 #include "glaze/util/parse.hpp"
@@ -104,26 +105,10 @@ namespace glz
                value = static_cast<V>(i);
             }
             else {
-               uint64_t i{};
-               int sign = 1;
-               if (*it == '-') {
-                  sign = -1;
-                  ++it;
-                  if (it == end) [[unlikely]] {
-                     ctx.error = error_code::unexpected_end;
-                     return;
-                  }
-               }
-               if (not glz::atoi(i, it, end)) [[unlikely]] {
+               if (not glz::atoi(value, it, end)) [[unlikely]] {
                   ctx.error = error_code::parse_number_failure;
                   return;
                }
-
-               if (i > (std::numeric_limits<V>::max)()) [[unlikely]] {
-                  ctx.error = error_code::parse_number_failure;
-                  return;
-               }
-               value = sign * static_cast<V>(i);
             }
          }
          else {
@@ -222,6 +207,179 @@ namespace glz
       }
    };
 
+   template <char_t T>
+   struct from<CSV, T>
+   {
+      template <auto Opts, class It>
+      static void op(auto&& value, is_context auto&& ctx, It&& it, auto&& end)
+      {
+         using storage_t = std::remove_cvref_t<decltype(value)>;
+
+         if (it == end) {
+            ctx.error = error_code::unexpected_end;
+            return;
+         }
+
+         std::string_view field{};
+         bool quoted = false;
+
+         if (*it == '"') {
+            quoted = true;
+            ++it;
+
+            auto content_begin = it;
+            bool closed = false;
+
+            while (it != end) {
+               if (*it == '"') {
+                  ++it;
+                  if (it == end) {
+                     closed = true;
+                     break;
+                  }
+                  if (*it == '"') {
+                     ++it;
+                  }
+                  else {
+                     closed = true;
+                     break;
+                  }
+               }
+               else {
+                  ++it;
+               }
+            }
+
+            if (!closed) {
+               ctx.error = error_code::syntax_error;
+               return;
+            }
+
+            auto closing = it;
+            --closing;
+            field = std::string_view(content_begin, static_cast<std::size_t>(closing - content_begin));
+
+            if (it != end && *it != ',' && *it != '\n' && *it != '\r') {
+               ctx.error = error_code::syntax_error;
+               return;
+            }
+         }
+         else {
+            auto content_begin = it;
+            while (it != end && *it != ',' && *it != '\n' && *it != '\r') {
+               ++it;
+            }
+            field = std::string_view(content_begin, static_cast<std::size_t>(it - content_begin));
+         }
+
+         if (field.empty()) {
+            value = storage_t{};
+            return;
+         }
+
+         storage_t parsed{};
+         bool has_char = false;
+
+         if (quoted) {
+            std::size_t idx = 0;
+            while (idx < field.size()) {
+               const char c = field[idx];
+               if (c == '"') {
+                  if (idx + 1 >= field.size() || field[idx + 1] != '"') {
+                     ctx.error = error_code::syntax_error;
+                     return;
+                  }
+                  idx += 2;
+                  if (has_char) {
+                     ctx.error = error_code::syntax_error;
+                     return;
+                  }
+                  parsed = static_cast<storage_t>('"');
+                  has_char = true;
+               }
+               else {
+                  ++idx;
+                  if (has_char) {
+                     ctx.error = error_code::syntax_error;
+                     return;
+                  }
+                  parsed = static_cast<storage_t>(c);
+                  has_char = true;
+               }
+            }
+         }
+         else {
+            if (field.size() != 1) {
+               ctx.error = error_code::syntax_error;
+               return;
+            }
+            parsed = static_cast<storage_t>(field.front());
+            has_char = true;
+         }
+
+         if (!has_char) {
+            value = storage_t{};
+            return;
+         }
+
+         value = parsed;
+      }
+   };
+
+   template <class T>
+      requires(is_named_enum<T>)
+   struct from<CSV, T>
+   {
+      template <auto Opts, class It>
+      static void op(auto&& value, is_context auto&& ctx, It&& it, auto&& end)
+      {
+         if (bool(ctx.error)) [[unlikely]] {
+            return;
+         }
+
+         if (it == end) [[unlikely]] {
+            ctx.error = error_code::unexpected_end;
+            return;
+         }
+
+         std::string field{};
+         parse<CSV>::op<Opts>(field, ctx, it, end);
+
+         if (bool(ctx.error)) [[unlikely]] {
+            return;
+         }
+
+         sv key{field.data(), field.size()};
+
+         constexpr auto N = reflect<T>::size;
+
+         if constexpr (N == 0) {
+            ctx.error = error_code::unexpected_enum;
+            return;
+         }
+         else if constexpr (N == 1) {
+            if (key == get<0>(reflect<T>::keys)) {
+               value = get<0>(reflect<T>::values);
+            }
+            else {
+               ctx.error = error_code::unexpected_enum;
+            }
+         }
+         else {
+            static constexpr auto HashInfo = hash_info<T>;
+            const auto index = decode_hash_with_size<CSV, T, HashInfo, HashInfo.type>::op(
+               key.data(), key.data() + key.size(), key.size());
+
+            if (index >= N || reflect<T>::keys[index] != key) [[unlikely]] {
+               ctx.error = error_code::unexpected_enum;
+               return;
+            }
+
+            visit<N>([&]<size_t I>() { value = get<I>(reflect<T>::values); }, index);
+         }
+      }
+   };
+
    template <bool_t T>
    struct from<CSV, T>
    {
@@ -280,6 +438,16 @@ namespace glz
       }
    };
 
+   template <>
+   struct from<CSV, skip>
+   {
+      template <auto Opts, class It0, class It1>
+      GLZ_ALWAYS_INLINE static void op(auto&&, is_context auto&& ctx, It0&& it, It1&& end) noexcept
+      {
+         skip_value<CSV>::template op<Opts>(ctx, std::forward<It0>(it), std::forward<It1>(end));
+      }
+   };
+
    template <readable_array_t T>
    struct from<CSV, T>
    {
@@ -329,7 +497,7 @@ namespace glz
       static void op(auto&& value, is_context auto&& ctx, It&& it, auto&& end)
       {
          // Clear existing data if not appending (only for resizable containers)
-         if constexpr (!Opts.append_arrays && resizable<T>) {
+         if constexpr (!check_append_arrays(Opts) && resizable<T>) {
             value.clear();
          }
 
@@ -897,7 +1065,7 @@ namespace glz
          static constexpr auto HashInfo = hash_info<U>;
 
          // Clear existing data if not appending
-         if constexpr (!Opts.append_arrays) {
+         if constexpr (!check_append_arrays(Opts)) {
             value.clear();
          }
 

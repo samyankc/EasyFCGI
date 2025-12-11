@@ -4,6 +4,7 @@
 #pragma once
 
 #include "glaze/beve/header.hpp"
+#include "glaze/beve/key_traits.hpp"
 #include "glaze/beve/skip.hpp"
 #include "glaze/core/opts.hpp"
 #include "glaze/core/read.hpp"
@@ -26,7 +27,7 @@ namespace glz
       GLZ_ALWAYS_INLINE static void op(T&& value, Tag&& tag, Ctx&& ctx, It0&& it, It1&& end)
       {
          if constexpr (const_value_v<T>) {
-            if constexpr (Opts.error_on_const_read) {
+            if constexpr (check_error_on_const_read(Opts)) {
                ctx.error = error_code::attempt_const_read;
             }
             else {
@@ -46,7 +47,7 @@ namespace glz
       GLZ_ALWAYS_INLINE static void op(T&& value, Ctx&& ctx, It0&& it, It1&& end)
       {
          if constexpr (const_value_v<T>) {
-            if constexpr (Opts.error_on_const_read) {
+            if constexpr (check_error_on_const_read(Opts)) {
                ctx.error = error_code::attempt_const_read;
             }
             else {
@@ -72,6 +73,16 @@ namespace glz
          using V = std::decay_t<decltype(get_member(std::declval<Value>(), meta_wrapper_v<T>))>;
          from<BEVE, V>::template op<Opts>(get_member(std::forward<Value>(value), meta_wrapper_v<T>),
                                           std::forward<Ctx>(ctx), std::forward<It0>(it), std::forward<It1>(end));
+      }
+
+      template <auto Opts, class Value, class Tag, is_context Ctx, class It0, class It1>
+         requires(check_no_header(Opts))
+      GLZ_ALWAYS_INLINE static void op(Value&& value, Tag&& tag, Ctx&& ctx, It0&& it, It1&& end)
+      {
+         using V = std::decay_t<decltype(get_member(std::declval<Value>(), meta_wrapper_v<T>))>;
+         from<BEVE, V>::template op<Opts>(get_member(std::forward<Value>(value), meta_wrapper_v<T>),
+                                          std::forward<Tag>(tag), std::forward<Ctx>(ctx), std::forward<It0>(it),
+                                          std::forward<It1>(end));
       }
    };
 
@@ -493,7 +504,7 @@ namespace glz
          }
 
          if (value.index() != type_index) {
-            value = runtime_variant_map<T>()[type_index];
+            emplace_runtime_variant(value, type_index);
          }
          std::visit([&](auto&& v) { parse<BEVE>::op<Opts>(v, ctx, it, end); }, value);
       }
@@ -1002,9 +1013,7 @@ namespace glz
          using Element = typename T::value_type;
          using Key = typename Element::first_type;
 
-         constexpr uint8_t type = str_t<Key> ? 0 : (std::is_signed_v<Key> ? 0b000'01'000 : 0b000'10'000);
-         constexpr uint8_t byte_cnt = str_t<Key> ? 0 : byte_count<Key>;
-         constexpr uint8_t header = tag::object | type | (byte_cnt << 5);
+         constexpr uint8_t header = beve_key_traits<Key>::header;
 
          if (invalid_end(ctx, it, end)) {
             return;
@@ -1013,7 +1022,7 @@ namespace glz
          if (tag != header) [[unlikely]] {
             if constexpr (check_allow_conversions(Opts)) {
                const auto key_type = tag & 0b000'11'000;
-               if constexpr (str_t<Key>) {
+               if constexpr (beve_key_traits<Key>::as_string) {
                   if (key_type != 0) {
                      ctx.error = error_code::syntax_error;
                      return;
@@ -1040,22 +1049,11 @@ namespace glz
 
          value.clear();
 
-         if constexpr (std::is_arithmetic_v<std::decay_t<Key>>) {
-            constexpr uint8_t key_tag = tag::number | type | (byte_cnt << 5);
-            for (size_t i = 0; i < n; ++i) {
-               // convert the object tag to the key type tag
-               auto& item = value.emplace_back();
-               parse<BEVE>::op<no_header_on<Opts>()>(item.first, key_tag, ctx, it, end);
-               parse<BEVE>::op<Opts>(item.second, ctx, it, end);
-            }
-         }
-         else {
-            constexpr uint8_t key_tag = tag::string;
-            for (size_t i = 0; i < n; ++i) {
-               auto& item = value.emplace_back();
-               parse<BEVE>::op<no_header_on<Opts>()>(item.first, key_tag, ctx, it, end);
-               parse<BEVE>::op<Opts>(item.second, ctx, it, end);
-            }
+         constexpr uint8_t key_tag = beve_key_traits<Key>::key_tag;
+         for (size_t i = 0; i < n; ++i) {
+            auto& item = value.emplace_back();
+            parse<BEVE>::op<no_header_on<Opts>()>(item.first, key_tag, ctx, it, end);
+            parse<BEVE>::op<Opts>(item.second, ctx, it, end);
          }
       }
    };
@@ -1068,9 +1066,7 @@ namespace glz
       {
          using Key = typename T::first_type;
 
-         constexpr uint8_t type = str_t<Key> ? 0 : (std::is_signed_v<Key> ? 0b000'01'000 : 0b000'10'000);
-         constexpr uint8_t byte_cnt = str_t<Key> ? 0 : byte_count<Key>;
-         constexpr uint8_t header = tag::object | type | (byte_cnt << 5);
+         constexpr uint8_t header = beve_key_traits<Key>::header;
 
          if (invalid_end(ctx, it, end)) {
             return;
@@ -1092,7 +1088,7 @@ namespace glz
             return;
          }
 
-         constexpr uint8_t key_tag = type == 0 ? tag::string : (tag::number | type | (byte_cnt << 5));
+         constexpr uint8_t key_tag = beve_key_traits<Key>::key_tag;
          parse<BEVE>::op<no_header_on<Opts>()>(value.first, key_tag, ctx, it, end);
          parse<BEVE>::op<Opts>(value.second, ctx, it, end);
       }
@@ -1106,9 +1102,7 @@ namespace glz
       {
          using Key = typename T::key_type;
 
-         constexpr uint8_t type = str_t<Key> ? 0 : (std::is_signed_v<Key> ? 0b000'01'000 : 0b000'10'000);
-         constexpr uint8_t byte_cnt = str_t<Key> ? 0 : byte_count<Key>;
-         constexpr uint8_t header = tag::object | type | (byte_cnt << 5);
+         constexpr uint8_t header = beve_key_traits<Key>::header;
 
          if (invalid_end(ctx, it, end)) {
             return;
@@ -1117,7 +1111,7 @@ namespace glz
          if (tag != header) [[unlikely]] {
             if constexpr (check_allow_conversions(Opts)) {
                const auto key_type = tag & 0b000'11'000;
-               if constexpr (str_t<Key>) {
+               if constexpr (beve_key_traits<Key>::as_string) {
                   if (key_type != 0) {
                      ctx.error = error_code::syntax_error;
                      return;
@@ -1146,8 +1140,9 @@ namespace glz
             n = value.size();
          }
 
-         if constexpr (std::is_arithmetic_v<std::decay_t<Key>>) {
-            constexpr uint8_t key_tag = tag::number | type | (byte_cnt << 5);
+         constexpr uint8_t key_tag = beve_key_traits<Key>::key_tag;
+
+         if constexpr (beve_key_traits<Key>::as_number) {
             Key key;
             for (size_t i = 0; i < n; ++i) {
                if constexpr (Opts.partial_read) {
@@ -1164,7 +1159,6 @@ namespace glz
             }
          }
          else {
-            constexpr uint8_t key_tag = tag::string;
             static thread_local Key key;
             for (size_t i = 0; i < n; ++i) {
                if constexpr (Opts.partial_read) {
@@ -1232,6 +1226,42 @@ namespace glz
                }
             }
             parse<BEVE>::op<Opts>(*value, ctx, it, end);
+         }
+      }
+   };
+
+   template <class T>
+      requires(nullable_value_t<T> && not nullable_like<T> && not is_expected<T> && not custom_read<T>)
+   struct from<BEVE, T> final
+   {
+      template <auto Opts>
+      GLZ_ALWAYS_INLINE static void op(auto&& value, is_context auto&& ctx, auto&& it, auto&& end)
+      {
+         if (invalid_end(ctx, it, end)) {
+            return;
+         }
+         const auto tag = uint8_t(*it);
+
+         if (tag == tag::null) {
+            ++it;
+            if constexpr (requires { value.reset(); }) {
+               value.reset();
+            }
+         }
+         else {
+            if (not value.has_value()) {
+               if constexpr (constructible<T>) {
+                  value = meta_construct_v<T>();
+               }
+               else if constexpr (requires { value.emplace(); }) {
+                  value.emplace();
+               }
+               else {
+                  ctx.error = error_code::invalid_nullable_read;
+                  return;
+               }
+            }
+            parse<BEVE>::op<Opts>(value.value(), ctx, it, end);
          }
       }
    };
@@ -1394,6 +1424,17 @@ namespace glz
                         static constexpr auto TargetKey = get<I>(reflect<T>::keys);
                         static constexpr auto Length = TargetKey.size();
                         if ((Length == n) && compare<Length>(TargetKey.data(), key.data())) [[likely]] {
+                           // Check for null value skipping on read
+                           if constexpr (check_skip_null_members_on_read(Opts)) {
+                              if (invalid_end(ctx, it, end)) {
+                                 return;
+                              }
+                              if (uint8_t(*it) == tag::null) {
+                                 ++it; // Skip the null tag
+                                 return;
+                              }
+                           }
+
                            if constexpr (reflectable<T>) {
                               parse<BEVE>::op<Opts>(get_member(value, get<I>(to_tie(value))), ctx, it, end);
                            }

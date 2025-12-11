@@ -11,9 +11,6 @@
 #if !defined(GLZ_DISABLE_SIMD) && (defined(__x86_64__) || defined(_M_X64))
 #if defined(_MSC_VER)
 #include <intrin.h>
-#pragma warning(push)
-#pragma warning( \
-   disable : 4702) // disable "unreachable code" warnings, which are often invalid due to constexpr branching
 #else
 #include <immintrin.h>
 #endif
@@ -21,6 +18,12 @@
 #if defined(__AVX2__)
 #define GLZ_USE_AVX2
 #endif
+#endif
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// disable "unreachable code" warnings, which are often invalid due to constexpr branching
+#pragma warning(push)
+#pragma warning(disable : 4702)
 #endif
 
 #include "glaze/core/opts.hpp"
@@ -361,8 +364,15 @@ namespace glz
    struct to<JSON, T>
    {
       template <auto Opts>
-      static void op(auto&&, is_context auto&&, auto&&...) noexcept
-      {}
+      static void op(auto&&, is_context auto&&, auto&& b, auto&& ix) noexcept
+      {
+         if constexpr (check_write_member_functions(Opts)) {
+            constexpr sv type_name = name_v<T>;
+            dump<'"'>(b, ix);
+            dump(type_name, b, ix);
+            dump<'"'>(b, ix);
+         }
+      }
    };
 
    template <is_reference_wrapper T>
@@ -419,7 +429,7 @@ namespace glz
             }
          }
 
-         if constexpr (Opts.bools_as_numbers) {
+         if constexpr (check_bools_as_numbers(Opts)) {
             if (value) {
                std::memcpy(&b[ix], "1", 1);
             }
@@ -561,7 +571,7 @@ namespace glz
                      return value ? value : "";
                   }
                   else if constexpr (array_char_t<T>) {
-                     return *value.data() ? sv{value.data()} : "";
+                     return sv{value.data(), value.size()};
                   }
                   else {
                      return sv{value};
@@ -1142,8 +1152,8 @@ namespace glz
             }
 
             using val_t = detail::iterator_second_type<T>; // the type of value in each [key, value] pair
-
-            if constexpr (not always_skipped<val_t>) {
+            constexpr bool write_member_functions = check_write_member_functions(Opts);
+            if constexpr (!always_skipped<val_t> && (write_member_functions || !is_member_function_pointer<val_t>)) {
                if constexpr (null_t<val_t> && Opts.skip_null_members) {
                   auto write_first_entry = [&](auto&& it) {
                      auto&& [key, entry_val] = *it;
@@ -1344,8 +1354,16 @@ namespace glz
                using V = std::decay_t<decltype(val)>;
 
                if constexpr (check_write_type_info(Opts) && not tag_v<T>.empty() &&
-                             (glaze_object_t<V> || (reflectable<V> && !has_member_with_name<V>(tag_v<T>)))) {
-                  constexpr auto N = reflect<V>::size;
+                             (glaze_object_t<V> || (reflectable<V> && !has_member_with_name<V>(tag_v<T>)) ||
+                              is_memory_object<V>)) {
+                  constexpr auto N = []() {
+                     if constexpr (is_memory_object<V>) {
+                        return reflect<memory_type<V>>::size;
+                     }
+                     else {
+                        return reflect<V>::size;
+                     }
+                  }();
 
                   // must first write out type
                   if constexpr (Opts.prettify) {
@@ -1404,7 +1422,16 @@ namespace glz
                         }
                      }
                   }
-                  to<JSON, V>::template op<opening_and_closing_handled<Opts>()>(val, ctx, b, ix);
+                  if constexpr (is_memory_object<V>) {
+                     if (!val) [[unlikely]] {
+                        ctx.error = error_code::invalid_variant_object;
+                        return;
+                     }
+                     to<JSON, memory_type<V>>::template op<opening_and_closing_handled<Opts>()>(*val, ctx, b, ix);
+                  }
+                  else {
+                     to<JSON, V>::template op<opening_and_closing_handled<Opts>()>(val, ctx, b, ix);
+                  }
                   // If we skip everything then we may have an extra comma, which we want to revert
                   if constexpr (Opts.skip_null_members) {
                      if (b[ix - 1] == ',') {
@@ -1605,7 +1632,8 @@ namespace glz
             }
 
             // skip
-            if constexpr (always_skipped<val_t>) {
+            constexpr bool write_member_functions = check_write_member_functions(Opts);
+            if constexpr (always_skipped<val_t> || (!write_member_functions && is_member_function_pointer<val_t>)) {
                return;
             }
             else {
@@ -1806,8 +1834,23 @@ namespace glz
                      static constexpr meta_context mctx{.op = operation::serialize};
                      if constexpr (meta<T>::skip(reflect<T>::keys[I], mctx)) return;
                   }
+                  if constexpr (meta_has_skip_if<T>) {
+                     static constexpr auto key = glz::get<I>(reflect<T>::keys);
+                     static constexpr meta_context mctx{.op = operation::serialize};
+                     decltype(auto) field_value = [&]() -> decltype(auto) {
+                        if constexpr (reflectable<T>) {
+                           return get<I>(t);
+                        }
+                        else {
+                           return get_member(value, glz::get<I>(reflect<T>::values));
+                        }
+                     }();
+                     if (meta<T>::skip_if(field_value, key, mctx)) return;
+                  }
 
-                  if constexpr (always_skipped<val_t>) {
+                  constexpr bool write_member_functions = check_write_member_functions(Opts);
+                  if constexpr (always_skipped<val_t> ||
+                                (!write_member_functions && is_member_function_pointer<val_t>)) {
                      return;
                   }
                   else {
@@ -2025,6 +2068,6 @@ namespace glz
    }
 }
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(pop)
 #endif

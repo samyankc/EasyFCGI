@@ -5,10 +5,11 @@
 
 #include "glaze/beve/header.hpp"
 #include "glaze/core/common.hpp"
+#include "glaze/core/opts.hpp"
 #include "glaze/core/wrappers.hpp"
 #include "glaze/util/primes_64.hpp"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 // Turn off MSVC warning for unreferenced formal parameter, which is referenced in a constexpr branch
 #pragma warning(push)
 #pragma warning(disable : 4100 4189)
@@ -219,20 +220,26 @@ namespace glz
    inline constexpr bool maybe_skipped = [] {
       if constexpr (reflect<T>::size > 0) {
          constexpr auto N = reflect<T>::size;
-         if constexpr (meta_has_skip<T>) {
-            // If the glz::meta provides a skip method, we assume the user wants to skip fields
+         if constexpr (meta_has_skip<T> || meta_has_skip_if<T>) {
             return true;
          }
          else if constexpr (Opts.skip_null_members) {
             // if any type could be null then we might skip
-            return []<size_t... I>(std::index_sequence<I...>) {
-               return ((always_skipped<field_t<T, I>> || null_t<field_t<T, I>>) || ...);
+            constexpr bool write_member_functions = check_write_member_functions(Opts);
+            return [&]<size_t... I>(std::index_sequence<I...>) {
+               return ((always_skipped<field_t<T, I>> ||
+                        (!write_member_functions && is_member_function_pointer<field_t<T, I>>) ||
+                        null_t<field_t<T, I>>) ||
+                       ...);
             }(std::make_index_sequence<N>{});
          }
          else {
             // if we have an always_skipped type then we return true
-            return []<size_t... I>(std::index_sequence<I...>) {
-               return ((always_skipped<field_t<T, I>>) || ...);
+            constexpr bool write_member_functions = check_write_member_functions(Opts);
+            return [&]<size_t... I>(std::index_sequence<I...>) {
+               return ((always_skipped<field_t<T, I>> ||
+                        (!write_member_functions && is_member_function_pointer<field_t<T, I>>)) ||
+                       ...);
             }(std::make_index_sequence<N>{});
          }
       }
@@ -312,7 +319,26 @@ namespace glz
       if constexpr (Opts.error_on_missing_keys) {
          for_each<N>([&]<auto I>() constexpr {
             using V = std::decay_t<refl_t<T, I>>;
-            if constexpr (is_specialization_v<V, custom_t>) {
+
+            // Check if meta<T>::requires_key customization point exists
+            if constexpr (meta_has_requires_key<T>) {
+               constexpr auto key = reflect<T>::keys[I];
+               constexpr bool is_nullable = [] {
+                  if constexpr (is_specialization_v<V, custom_t>) {
+                     using From = typename V::from_t;
+                     return custom_type_is_nullable<V, From>();
+                  }
+                  else if constexpr (is_cast<V>) {
+                     using CastType = typename V::cast_type;
+                     return null_t<CastType>;
+                  }
+                  else {
+                     return null_t<V>;
+                  }
+               }();
+               fields[I] = meta<T>::requires_key(key, is_nullable);
+            }
+            else if constexpr (is_specialization_v<V, custom_t>) {
                using From = typename V::from_t;
 
                // If we are reading a glz::custom_t, we must deduce the input argument and not require the key if it is
@@ -475,8 +501,15 @@ namespace glz
    {
       using V = std::decay_t<T>;
       using U = std::underlying_type_t<V>;
-      constexpr auto arr = make_enum_to_string_array<V>();
-      return arr[static_cast<U>(enum_value)];
+
+      // use make_enum_to_string_map for O(1) lookup with perfect hashing
+      // This handles non-monotonic enums and large values safely
+      constexpr auto map = make_enum_to_string_map<V>();
+      const auto it = map.find(static_cast<U>(enum_value));
+      if (it != map.end()) {
+         return it->second;
+      }
+      return std::string_view{};
    }
 
    template <glaze_flags_t T>
@@ -2096,7 +2129,7 @@ namespace glz
    };
 }
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 // restore disabled warnings
 #pragma warning(pop)
 #endif

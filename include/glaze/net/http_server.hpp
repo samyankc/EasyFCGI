@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
@@ -13,6 +15,7 @@
 #include <glaze/glaze.hpp>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <source_location>
 #include <thread>
@@ -360,6 +363,37 @@ namespace glz
    // Handler types for streaming
    using streaming_handler = std::function<void(request&, streaming_response&)>;
 
+   // Wrapping middleware types
+   // Non-copyable, non-movable wrapper to enforce synchronous execution
+   // This prevents accidental storage and async invocation which would cause dangling references
+   struct next_handler final
+   {
+      explicit next_handler(std::function<void()> fn) : fn_(std::move(fn)) {}
+
+      // Prevent copying and moving to enforce synchronous usage
+      next_handler(const next_handler&) = delete;
+      next_handler(next_handler&&) = delete;
+      next_handler& operator=(const next_handler&) = delete;
+      next_handler& operator=(next_handler&&) = delete;
+
+      void operator()() const { fn_(); }
+
+     private:
+      std::function<void()> fn_;
+   };
+
+   // C++20 concept for wrapping middleware callables
+   template <typename F>
+   concept wrapping_middleware_callable = requires(F&& f, const request& req, response& res, const next_handler& next) {
+      { std::forward<F>(f)(req, res, next) } -> std::same_as<void>;
+   };
+
+   using wrapping_middleware = std::function<void(const request&, response&, const next_handler&)>;
+
+   // Request/Response lifecycle hooks for metrics and logging
+   using request_hook = std::function<void(const request&, response&)>;
+   using response_hook = std::function<void(const request&, const response&)>;
+
    // Server implementation using non-blocking asio with WebSocket support
    template <bool EnableTLS = false>
    struct http_server
@@ -373,12 +407,64 @@ namespace glz
 #endif
                                              asio::ip::tcp::socket>;
 
-      inline http_server() : io_context(std::make_unique<asio::io_context>())
+      /**
+       * @brief Construct an HTTP server
+       *
+       * @param context Optional external io_context to use. If nullptr, creates its own.
+       *                Using an external io_context allows sharing the event loop with
+       *                other asio-based components or managing the io_context lifecycle
+       *                externally.
+       * @param custom_error_handler Optional error handler for server errors.
+       *                             If not provided, uses a default handler that prints
+       *                             to stderr.
+       *
+       * Example with internal io_context (default):
+       * @code
+       * glz::http_server server;
+       * server.bind(8080);
+       * server.start();  // Creates worker threads using hardware_concurrency()
+       * @endcode
+       *
+       * Example with external io_context:
+       * @code
+       * auto io_ctx = std::make_shared<asio::io_context>();
+       * glz::http_server server(io_ctx);
+       * server.bind(8080);
+       * server.start(0);  // Pass 0 to skip creating worker threads
+       *
+       * // Run io_context in your own thread(s)
+       * std::thread io_thread([io_ctx]() {
+       *    io_ctx->run();
+       * });
+       *
+       * // ... later ...
+       * server.stop();
+       * io_ctx->stop();
+       * io_thread.join();
+       * @endcode
+       *
+       * Example with custom error handler:
+       * @code
+       * auto error_handler = [](std::error_code ec, std::source_location loc) {
+       *    my_logger.error("Server error at {}:{}: {}",
+       *                    loc.file_name(), loc.line(), ec.message());
+       * };
+       * glz::http_server server(nullptr, error_handler);
+       * @endcode
+       */
+      inline http_server(std::shared_ptr<asio::io_context> context = nullptr,
+                         glz::error_handler custom_error_handler = {})
+         : io_context(context ? context : std::make_shared<asio::io_context>())
       {
-         error_handler = [](std::error_code ec, std::source_location loc) {
-            std::fprintf(stderr, "Error at %s:%d: %s\n", loc.file_name(), static_cast<int>(loc.line()),
-                         ec.message().c_str());
-         };
+         if (custom_error_handler) {
+            error_handler = std::move(custom_error_handler);
+         }
+         else {
+            error_handler = [](std::error_code ec, std::source_location loc) {
+               std::fprintf(stderr, "Error at %s:%d: %s\n", loc.file_name(), static_cast<int>(loc.line()),
+                            ec.message().c_str());
+            };
+         }
 
          // Initialize SSL context for TLS-enabled servers
          if constexpr (EnableTLS) {
@@ -403,6 +489,10 @@ namespace glz
             }
          }
          threads.clear();
+
+         // websocket_handlers_ destruction will call close_all_connections() on each
+         // websocket_server, which force-closes all sockets. This ensures sockets are
+         // deregistered from the reactor BEFORE io_context is destroyed.
       }
 
       inline http_server& bind(std::string_view address, uint16_t port)
@@ -419,7 +509,72 @@ namespace glz
 
       inline http_server& bind(uint16_t port) { return bind("0.0.0.0", port); }
 
-      inline void start(size_t num_threads = 0)
+      inline uint16_t port(asio::error_code& ec) const
+      {
+         if (!acceptor) {
+            ec = asio::error::not_connected;
+            return 0;
+         }
+         auto endpoint = acceptor->local_endpoint(ec);
+         if (ec) {
+            return 0;
+         }
+         return endpoint.port();
+      }
+
+      inline uint16_t port() const
+      {
+         if (!acceptor) {
+            throw std::runtime_error("Server not bound");
+         }
+         return acceptor->local_endpoint().port();
+      }
+
+      /**
+       * @brief Start the HTTP server
+       *
+       * @param num_threads Number of worker threads to create:
+       *                    - std::nullopt (default): Uses std::thread::hardware_concurrency(),
+       *                      with a minimum of 1 thread if hardware_concurrency() returns 0
+       *                    - 0: No worker threads created (caller manages io_context::run())
+       *                    - N: Creates exactly N worker threads
+       *
+       * When using an external io_context, pass 0 to avoid creating threads,
+       * then call io_context::run() in your own thread(s).
+       *
+       * Example with default behavior:
+       * @code
+       * glz::http_server server;
+       * server.bind(8080);
+       * server.start();  // Uses hardware_concurrency() threads
+       * @endcode
+       *
+       * Example with specific thread count:
+       * @code
+       * glz::http_server server;
+       * server.bind(8080);
+       * server.start(4);  // Creates exactly 4 worker threads
+       * @endcode
+       *
+       * Example with external io_context:
+       * @code
+       * auto io_ctx = std::make_shared<asio::io_context>();
+       * glz::http_server server(io_ctx);
+       * server.bind(8080);
+       * server.start(0);  // No worker threads - caller manages io_context
+       *
+       * // Run io_context in your own thread
+       * std::thread io_thread([io_ctx]() {
+       *    io_ctx->run();
+       * });
+       *
+       * // ... later ...
+       * server.stop();
+       * io_ctx->stop();
+       * io_thread.join();
+       * @endcode
+       */
+      inline void start(std::optional<size_t> num_threads = std::nullopt)
       {
          if (running || !acceptor) {
             return;
@@ -427,21 +582,32 @@ namespace glz
 
          running = true;
 
-         // Use hardware concurrency if not specified
-         if (num_threads == 0) {
-            num_threads = std::thread::hardware_concurrency();
+         // Determine number of threads
+         size_t actual_threads;
+         if (num_threads.has_value()) {
+            // Use the explicitly specified value (including 0)
+            actual_threads = *num_threads;
+         }
+         else {
+            // Use hardware concurrency, but ensure at least 1 thread
+            actual_threads = std::thread::hardware_concurrency();
+            if (actual_threads == 0) {
+               actual_threads = 1;
+            }
          }
 
          // Start the acceptor
          do_accept();
 
-         // Start worker threads
-         threads.reserve(num_threads);
-         for (size_t i = 0; i < num_threads; ++i) {
-            threads.emplace_back([this] {
-               io_context->run();
-               // Don't report errors during shutdown
-            });
+         // Start worker threads (unless explicitly set to 0)
+         if (actual_threads > 0) {
+            threads.reserve(actual_threads);
+            for (size_t i = 0; i < actual_threads; ++i) {
+               threads.emplace_back([this] {
+                  io_context->run();
+                  // Don't report errors during shutdown
+               });
+            }
          }
       }
 
@@ -527,6 +693,95 @@ namespace glz
       inline http_server& use(handler middleware)
       {
          root_router.use(std::move(middleware));
+         return *this;
+      }
+
+      /**
+       * @brief Register wrapping middleware that executes around route handlers
+       *
+       * Wrapping middleware can execute code before AND after the handler by wrapping
+       * the next() function. This enables natural timing measurements, response
+       * transformation, and comprehensive error handling.
+       *
+       * Use cases:
+       * - Request/response timing and metrics
+       * - Logging with full context (including response status and timing)
+       * - Response transformation (compression, encryption, header injection)
+       * - Error handling around handlers (try-catch wrapping)
+       * - Any cross-cutting concerns that need both before and after logic
+       *
+       * CRITICAL SAFETY REQUIREMENT:
+       * ============================
+       * The next() handler MUST be called synchronously within the middleware function.
+       * The next_handler type is intentionally non-copyable and non-movable to prevent
+       * accidental storage and asynchronous invocation.
+       *
+       * Storing next() or calling it asynchronously will result in:
+       * - Compile-time errors (if you try to copy/move it)
+       * - Undefined behavior due to dangling references (if you work around the safety)
+       *
+       * The request, response, and handler objects are only valid during the synchronous
+       * execution of the middleware chain.
+       *
+       * CORRECT Usage:
+       * ```cpp
+       * server.wrap([](const request& req, response& res, auto next) {
+       *     auto start = std::chrono::steady_clock::now();
+       *     next(); // ✓ Synchronous call - correct
+       *     auto duration = std::chrono::steady_clock::now() - start;
+       *     std::cout << "Request took " << duration.count() << "ns\n";
+       * });
+       * ```
+       *
+       * INCORRECT Usage (will not compile):
+       * ```cpp
+       * server.wrap([](const request& req, response& res, auto next) {
+       *     // ✗ COMPILE ERROR: next_handler is non-copyable
+       *     std::thread([next]() {
+       *         std::this_thread::sleep_for(std::chrono::seconds(1));
+       *         next(); // Would cause dangling references
+       *     }).detach();
+       * });
+       * ```
+       *
+       * For asynchronous operations, complete them BEFORE or AFTER calling next():
+       * ```cpp
+       * server.wrap([](const request& req, response& res, auto next) {
+       *     // Async work BEFORE handler
+       *     auto data = fetch_from_cache_async().get();
+       *
+       *     next(); // Synchronous handler execution
+       *
+       *     // Async work AFTER handler (fire and forget logging)
+       *     std::async(std::launch::async, [status = res.status_code]() {
+       *         log_to_remote_server(status);
+       *     });
+       * });
+       * ```
+       *
+       * Execution order with multiple middleware:
+       * ```cpp
+       * server.wrap([](auto&, auto&, auto next) {
+       *     std::cout << "A before\n";
+       *     next();
+       *     std::cout << "A after\n";
+       * });
+       * server.wrap([](auto&, auto&, auto next) {
+       *     std::cout << "B before\n";
+       *     next();
+       *     std::cout << "B after\n";
+       * });
+       * // Output: A before -> B before -> handler -> B after -> A after
+       * ```
+       *
+       * @tparam F Callable type (must satisfy wrapping_middleware_callable concept)
+       * @param middleware The wrapping middleware function
+       * @return Reference to this server for method chaining
+       */
+      template <wrapping_middleware_callable F>
+      inline http_server& wrap(F&& middleware)
+      {
+         wrapping_middlewares_.push_back(std::forward<F>(middleware));
          return *this;
       }
 
@@ -762,6 +1017,44 @@ namespace glz
       }
 
       /**
+       * @brief Register a hook to be called when a request is received
+       *
+       * Request hooks are called after the request is fully parsed, before middleware
+       * and route handlers are executed. This is useful for metrics tracking, logging,
+       * or request preprocessing.
+       *
+       * For timing measurements, consider using wrapping middleware instead, which can
+       * naturally measure duration by wrapping the next() function.
+       *
+       * @param hook The function to call for each request
+       * @return Reference to this server for method chaining
+       */
+      inline http_server& on_request(request_hook hook)
+      {
+         request_hooks_.push_back(std::move(hook));
+         return *this;
+      }
+
+      /**
+       * @brief Register a hook to be called before a response is sent
+       *
+       * Response hooks are called after the route handler completes, but before the
+       * response is sent to the client. This is useful for metrics collection,
+       * response logging, or adding final response headers.
+       *
+       * For timing measurements, consider using wrapping middleware instead, which can
+       * naturally measure duration by wrapping the next() function.
+       *
+       * @param hook The function to call before each response
+       * @return Reference to this server for method chaining
+       */
+      inline http_server& on_response(response_hook hook)
+      {
+         response_hooks_.push_back(std::move(hook));
+         return *this;
+      }
+
+      /**
        * @brief Load SSL certificate and private key for HTTPS servers
        *
        * @param cert_file Path to the certificate file (PEM format)
@@ -850,7 +1143,7 @@ namespace glz
       }
 
      private:
-      std::unique_ptr<asio::io_context> io_context;
+      std::shared_ptr<asio::io_context> io_context;
       std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
       std::vector<std::thread> threads;
       http_router root_router;
@@ -858,6 +1151,27 @@ namespace glz
       glz::error_handler error_handler;
       std::unordered_map<std::string, std::shared_ptr<websocket_server>> websocket_handlers_;
       std::unordered_map<std::string, std::unordered_map<http_method, streaming_handler>> streaming_handlers_;
+
+      // Wrapping middleware (executes around handlers)
+      std::vector<wrapping_middleware> wrapping_middlewares_;
+
+      // Lifecycle hooks for metrics and logging
+      std::vector<request_hook> request_hooks_;
+      std::vector<response_hook> response_hooks_;
+
+      // Helper for executing wrapping middleware chain
+      void execute_middleware_chain(size_t index, request& req, response& res, const handler& h)
+      {
+         if (index >= wrapping_middlewares_.size()) {
+            h(req, res);
+            return;
+         }
+
+         // Wrap the continuation in next_handler to enforce synchronous execution
+         next_handler next([this, index, &req, &res, &h]() { execute_middleware_chain(index + 1, req, res, h); });
+
+         wrapping_middlewares_[index](req, res, next);
+      }
 
       // Signal handling members
       bool signal_handling_enabled = false;
@@ -920,11 +1234,15 @@ namespace glz
 
                // Parse request line
                size_t request_line_end_pos = headers_part.find("\r\n");
+               std::string_view request_line;
                if (request_line_end_pos == std::string_view::npos) {
-                  request_line_end_pos = headers_part.length();
+                  request_line = headers_part; // Request line is the entire headers_part
+                  headers_part = ""; // headers_part becomes empty as there are no more headers
                }
-               std::string_view request_line = headers_part.substr(0, request_line_end_pos);
-               headers_part.remove_prefix(request_line_end_pos + 2); // +2 for \r\n
+               else {
+                  request_line = headers_part.substr(0, request_line_end_pos);
+                  headers_part.remove_prefix(request_line_end_pos + 2); // +2 for \r\n
+               }
 
                // Parse method, target, and HTTP version from the request line
                size_t first_space = request_line.find(' ');
@@ -1088,7 +1406,7 @@ namespace glz
 
          // Create WebSocket connection and start it
          // Need to include websocket_connection.hpp for this to work
-         auto ws_conn = std::make_shared<websocket_connection>(std::move(*socket), ws_it->second.get());
+         auto ws_conn = std::make_shared<websocket_connection<asio::ip::tcp::socket>>(socket, ws_it->second);
          ws_conn->start(req);
       }
 
@@ -1158,26 +1476,173 @@ namespace glz
          // Find a matching route using http_router::match which handles both exact and parameterized routes
          auto [handle, params] = root_router.match(method, target);
 
-         // Update the request with any extracted parameters
-         request.params = std::move(params);
+         // Create the response object up front so we can reuse it in fallback flows
+         response response;
+
+         // Call request hooks for metrics/logging
+         try {
+            for (const auto& hook : request_hooks_) {
+               hook(request, response);
+            }
+         }
+         catch (const std::exception&) {
+            error_handler(std::make_error_code(std::errc::invalid_argument), std::source_location::current());
+            send_error_response(socket, 500, "Internal Server Error");
+            return;
+         }
 
          if (!handle) {
-            // No matching route found
+            if (method == http_method::OPTIONS) {
+               std::vector<http_method> allowed_methods;
+               std::unordered_map<std::string, std::string> preflight_params;
+
+               auto capture_first_params = [&](std::unordered_map<std::string, std::string>&& candidate_params) {
+                  if (preflight_params.empty()) {
+                     preflight_params = std::move(candidate_params);
+                  }
+               };
+
+               auto try_method = [&](http_method method) {
+                  if (method == http_method::OPTIONS) return;
+                  auto [candidate_handle, candidate_params] = root_router.match(method, target);
+                  if (candidate_handle) {
+                     allowed_methods.push_back(method);
+                     capture_first_params(std::move(candidate_params));
+                  }
+               };
+
+               try_method(http_method::GET);
+               try_method(http_method::POST);
+               try_method(http_method::PUT);
+               try_method(http_method::DELETE);
+               try_method(http_method::PATCH);
+               try_method(http_method::HEAD);
+
+               if (!allowed_methods.empty()) {
+                  request.params = std::move(preflight_params);
+
+                  bool has_request_method_header = false;
+                  bool requested_method_known = false;
+                  http_method requested_method{};
+
+                  // Parse and normalize the request method from the Access-Control-Request-Method header
+                  if (auto request_method_it = request.headers.find("access-control-request-method");
+                      request_method_it != request.headers.end()) {
+                     has_request_method_header = true;
+                     std::string method_token = request_method_it->second;
+                     auto trim_pos = method_token.find_last_not_of(" \t\r\n");
+                     if (trim_pos != std::string::npos) {
+                        method_token.erase(trim_pos + 1);
+                     }
+                     else {
+                        method_token.clear();
+                     }
+
+                     if (!method_token.empty()) {
+                        std::transform(method_token.begin(), method_token.end(), method_token.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+
+                        if (auto parsed = from_string(method_token)) {
+                           requested_method = *parsed;
+                           requested_method_known = true;
+                        }
+                     }
+                  }
+
+                  if (std::none_of(allowed_methods.begin(), allowed_methods.end(),
+                                   [](http_method m) { return m == http_method::OPTIONS; })) {
+                     allowed_methods.push_back(http_method::OPTIONS);
+                  }
+
+                  // Build the Allow header
+                  std::string allow_header;
+                  allow_header.reserve(allowed_methods.size() * 8);
+                  for (size_t i = 0; i < allowed_methods.size(); ++i) {
+                     if (i > 0) allow_header.append(", ");
+                     allow_header.append(std::string{to_string(allowed_methods[i])});
+                  }
+                  response.header("Allow", allow_header);
+
+                  bool requested_method_allowed = true;
+                  if (has_request_method_header) {
+                     requested_method_allowed =
+                        requested_method_known && std::find(allowed_methods.begin(), allowed_methods.end(),
+                                                            requested_method) != allowed_methods.end();
+                  }
+
+                  try {
+                     for (const auto& middleware : root_router.middlewares) {
+                        middleware(request, response);
+                     }
+                  }
+                  catch (const std::exception&) {
+                     error_handler(std::make_error_code(std::errc::invalid_argument), std::source_location::current());
+                     send_error_response(socket, 500, "Internal Server Error");
+                     return;
+                  }
+
+                  if (!requested_method_allowed) {
+                     response.status(405);
+                     // Call response hooks before sending
+                     for (const auto& hook : response_hooks_) {
+                        try {
+                           hook(request, response);
+                        }
+                        catch (const std::exception&) {
+                           error_handler(std::make_error_code(std::errc::invalid_argument),
+                                         std::source_location::current());
+                        }
+                     }
+                     send_response(socket, response);
+                     return;
+                  }
+
+                  // Call response hooks before sending
+                  for (const auto& hook : response_hooks_) {
+                     try {
+                        hook(request, response);
+                     }
+                     catch (const std::exception&) {
+                        error_handler(std::make_error_code(std::errc::invalid_argument),
+                                      std::source_location::current());
+                     }
+                  }
+                  send_response(socket, response);
+                  return;
+               }
+            }
+
+            // No matching route found (path or method)
             send_error_response(socket, 404, "Not Found");
             return;
          }
 
-         // Create the response object
-         response response;
+         // Update the request with any extracted parameters
+         request.params = std::move(params);
 
          try {
-            // Apply middleware
+            // Apply old-style middleware (runs before handler)
             for (const auto& middleware : root_router.middlewares) {
                middleware(request, response);
             }
 
-            // Call the handle
-            handle(request, response);
+            // Execute wrapping middleware chain (index-based, no allocations)
+            if (wrapping_middlewares_.empty()) {
+               handle(request, response);
+            }
+            else {
+               execute_middleware_chain(0, request, response, handle);
+            }
+
+            // Call response hooks for metrics/logging
+            for (const auto& hook : response_hooks_) {
+               try {
+                  hook(request, response);
+               }
+               catch (const std::exception&) {
+                  error_handler(std::make_error_code(std::errc::invalid_argument), std::source_location::current());
+               }
+            }
 
             // Send the response
             send_response(socket, response);
@@ -1194,6 +1659,9 @@ namespace glz
 
       inline void send_response(std::shared_ptr<asio::ip::tcp::socket> socket, const response& response)
       {
+         // Note: We can't call response hooks here because we don't have access to the request object
+         // Response hooks are called in process_full_request before calling this method
+
          // Pre-calculate response size to avoid reallocations
          size_t estimated_size = 64; // Base size for status line
 

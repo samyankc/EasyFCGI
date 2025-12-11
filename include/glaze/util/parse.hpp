@@ -1200,6 +1200,58 @@ namespace glz
    {
       return val + (multiple - (val % multiple)) % multiple;
    }
+
+   inline bool validate_utf8(const auto* str, const size_t size) noexcept
+   {
+      const uint8_t* it = reinterpret_cast<const uint8_t*>(str);
+      const uint8_t* end = it + size;
+
+      while (it < end) {
+         // Optimistic SWAR check for ASCII
+         if (it + 8 <= end) {
+            uint64_t chunk;
+            std::memcpy(&chunk, it, 8);
+            if ((chunk & glz::repeat_byte8(0x80)) == 0) {
+               it += 8;
+               continue;
+            }
+         }
+
+         // Byte-by-byte validation (standard conformant)
+         uint8_t byte = *it;
+
+         if (byte < 0x80) {
+            it++;
+         }
+         else if ((byte & 0xE0) == 0xC0) {
+            // 2-byte sequence
+            if (it + 2 > end || (it[1] & 0xC0) != 0x80) return false;
+            if (byte < 0xC2) return false; // Overlong
+            it += 2;
+         }
+         else if ((byte & 0xF0) == 0xE0) {
+            // 3-byte sequence
+            if (it + 3 > end || (it[1] & 0xC0) != 0x80 || (it[2] & 0xC0) != 0x80) return false;
+            if (byte == 0xE0 && it[1] < 0xA0) return false; // Overlong
+            if (byte == 0xED && it[1] >= 0xA0) return false; // Surrogate
+            it += 3;
+         }
+         else if ((byte & 0xF8) == 0xF0) {
+            // 4-byte sequence
+            if (it + 4 > end || (it[1] & 0xC0) != 0x80 || (it[2] & 0xC0) != 0x80 || (it[3] & 0xC0) != 0x80)
+               return false;
+            if (byte == 0xF0 && it[1] < 0x90) return false; // Overlong
+            if (byte == 0xF4 && it[1] >= 0x90) return false; // > U+10FFFF
+            if (byte > 0xF4) return false; // > U+10FFFF
+            it += 4;
+         }
+         else {
+            return false;
+         }
+      }
+
+      return true;
+   }
 }
 
 namespace glz
@@ -1296,17 +1348,23 @@ namespace glz
 
          // If signed and negative, check if result fits
          if constexpr (is_signed) {
-            using S = std::make_signed_t<U>;
             // The largest magnitude we can represent in a negative value is (max + 1)
             // since -(min()) = max() + 1.
-            U limit = static_cast<U>((std::numeric_limits<I>::max)()) + 1U;
+            constexpr U limit = static_cast<U>((std::numeric_limits<I>::max)()) + 1U;
             if (negative) {
                if (acc > limit) {
                   result.ec = std::errc::result_out_of_range;
                   result.ptr = first;
                   return result;
                }
-               value = static_cast<I>(0 - static_cast<S>(acc));
+               // Negate in unsigned arithmetic to avoid signed overflow when acc == limit
+               // (e.g., when parsing -2147483648, acc = 2147483648u for int32)
+#if defined(_MSC_VER) && !defined(__clang__)
+               // Use subtraction from zero instead of unary minus to avoid MSVC C4146 error
+               value = static_cast<I>(U{0} - acc);
+#else
+               value = static_cast<I>(-acc);
+#endif
             }
             else {
                if (acc > static_cast<U>((std::numeric_limits<I>::max)())) {

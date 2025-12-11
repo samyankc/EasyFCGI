@@ -14,7 +14,6 @@
 #include "glaze/concepts/container_concepts.hpp"
 #include "glaze/core/array_apply.hpp"
 #include "glaze/core/cast.hpp"
-#include "glaze/core/constraint.hpp"
 #include "glaze/core/context.hpp"
 #include "glaze/core/error_category.hpp"
 #include "glaze/core/feature_test.hpp"
@@ -526,6 +525,26 @@ namespace glz
    template <class T>
    array_variant(T) -> array_variant<T>; // Only needed on older compilers until we move to template alias deduction
 
+   template <class T>
+   struct as_array_wrapper final
+   {
+      static constexpr auto glaze_reflect = false;
+      T& value;
+   };
+
+   template <auto MemPtr>
+   constexpr auto as_array_impl() noexcept
+   {
+      return [](auto&& value) {
+         using Value = std::decay_t<decltype(value)>;
+         using Member = std::decay_t<member_t<Value, decltype(MemPtr)>>;
+         return as_array_wrapper<Member>{get_member(value, MemPtr)};
+      };
+   }
+
+   template <auto MemPtr>
+   inline constexpr auto as_array = as_array_impl<MemPtr>();
+
    constexpr decltype(auto) conv_sv(auto&& value) noexcept
    {
       using V = std::decay_t<decltype(value)>;
@@ -537,6 +556,10 @@ namespace glz
       }
    }
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-braces"
+#endif
    constexpr auto array(auto&&... args) noexcept { return detail::Array{glz::tuple{conv_sv(args)...}}; }
 
    template <class... Args>
@@ -548,6 +571,10 @@ namespace glz
    constexpr auto enumerate(auto&&... args) noexcept { return detail::Enum{tuple{args...}}; }
 
    constexpr auto flags(auto&&... args) noexcept { return detail::Flags{tuple{args...}}; }
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 }
 
 namespace glz

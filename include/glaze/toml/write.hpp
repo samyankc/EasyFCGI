@@ -65,7 +65,7 @@ namespace glz
             }
          }
 
-         if constexpr (Opts.bools_as_numbers) {
+         if constexpr (check_bools_as_numbers(Opts)) {
             if (value) {
                std::memcpy(&b[ix], "1", 1);
             }
@@ -180,7 +180,7 @@ namespace glz
                      return value ? value : "";
                   }
                   else if constexpr (array_char_t<T>) {
-                     return *value.data() ? sv{value.data()} : "";
+                     return sv{value.data(), value.size()};
                   }
                   else {
                      return sv{value};
@@ -308,7 +308,8 @@ namespace glz
          for_each<N>([&]<size_t I>() {
             using val_t = field_t<T, I>;
 
-            if constexpr (always_skipped<val_t>)
+            constexpr bool write_member_functions = check_write_member_functions(Options);
+            if constexpr (always_skipped<val_t> || (!write_member_functions && is_member_function_pointer<val_t>))
                return;
             else {
                if constexpr (null_t<val_t>) {
